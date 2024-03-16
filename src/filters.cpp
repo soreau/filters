@@ -220,7 +220,9 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
 class wayfire_filters : public wf::plugin_interface_t
 {
-    OpenGL::program_t program;
+    OpenGL::program_t fs_program;
+    wf::post_hook_t hook;
+    bool fs_active = false;
     std::map<wayfire_view, std::shared_ptr<wf_filters>> transformers;
     wf::shared_data::ref_ptr_t<wf::ipc::method_repository_t> ipc_repo;
 
@@ -247,6 +249,15 @@ class wayfire_filters : public wf::plugin_interface_t
         ipc_repo->register_method("wf/filters/set-view-shader", ipc_set_view_shader);
         ipc_repo->register_method("wf/filters/unset-view-shader", ipc_unset_view_shader);
         ipc_repo->register_method("wf/filters/view-has-shader", ipc_view_has_shader);
+        ipc_repo->register_method("wf/filters/set-fs-shader", ipc_set_fs_shader);
+        ipc_repo->register_method("wf/filters/unset-fs-shader", ipc_unset_fs_shader);
+        ipc_repo->register_method("wf/filters/fs-has-shader", ipc_fs_has_shader);
+
+        hook = [=] (const wf::framebuffer_t& source,
+                    const wf::framebuffer_t& destination)
+        {
+            render(source, destination);
+        };
     }
 
     std::shared_ptr<wf_filters> ensure_transformer(wayfire_view view, std::string shader_path)
@@ -262,6 +273,77 @@ class wayfire_filters : public wf::plugin_interface_t
 
         return tmgr->get_transformer<wf_filters>(transformer_name);
     }
+
+    wf::ipc::method_callback ipc_set_fs_shader = [=] (nlohmann::json data) -> nlohmann::json
+    {
+        WFJSON_EXPECT_FIELD(data, "output-name", string);
+        WFJSON_EXPECT_FIELD(data, "shader-path", string);
+
+        OpenGL::render_begin();
+        fs_program.free_resources();
+        OpenGL::render_end();
+
+        std::string shader_source = data["shader-path"];
+        std::ifstream t(shader_source);
+        std::string fragment_shader((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
+        OpenGL::render_begin();
+        fs_program.compile(vertex_shader, fragment_shader);
+        OpenGL::render_end();
+        if (fs_program.get_program_id(wf::TEXTURE_TYPE_RGBA) == 0)
+        {
+            LOGE("Failed to compile fullscreen shader.");
+            for (auto &output : wf::get_core().output_layout->get_outputs())
+            {
+                output->render->rem_post(&hook);
+            }
+            return wf::ipc::json_error("Failed to compile fullscreen shader.");
+        }
+
+        if (fs_active)
+        {
+            for (auto &output : wf::get_core().output_layout->get_outputs())
+            {
+                output->render->damage_whole();
+            }
+            LOGI("Successfully compiled and applied fullscreen shader to output: ", data["output-name"]);
+            return wf::ipc::json_ok();
+        }
+
+        for (auto &output : wf::get_core().output_layout->get_outputs())
+        {
+            if (output->to_string() == data["output-name"])
+            {
+                output->render->add_post(&hook);
+                output->render->damage_whole();
+                fs_active = true;
+                LOGI("Successfully compiled and applied fullscreen shader to output: ", data["output-name"]);
+                return wf::ipc::json_ok();
+            }
+        }
+        LOGE("Failed to find output: ", data["output-name"]);
+        return wf::ipc::json_error("Failed to find output.");
+    };
+
+    wf::ipc::method_callback ipc_unset_fs_shader = [=] (nlohmann::json data) -> nlohmann::json
+    {
+        for (auto &output : wf::get_core().output_layout->get_outputs())
+        {
+            output->render->rem_post(&hook);
+            output->render->damage_whole();
+        }
+        fs_active = false;
+        OpenGL::render_begin();
+        fs_program.free_resources();
+        OpenGL::render_end();
+        return wf::ipc::json_ok();
+    };
+
+    wf::ipc::method_callback ipc_fs_has_shader = [=] (nlohmann::json data) -> nlohmann::json
+    {
+        auto response = wf::ipc::json_ok();
+        response["has-shader"] = fs_active;
+        return response;
+    };
 
     wf::ipc::method_callback ipc_set_view_shader = [=] (nlohmann::json data) -> nlohmann::json
     {
@@ -318,13 +400,57 @@ class wayfire_filters : public wf::plugin_interface_t
         return response;
     };
 
+    void render(const wf::framebuffer_t& source,
+        const wf::framebuffer_t& destination)
+    {
+        static const float vertexData[] = {
+            -1.0f, -1.0f,
+            1.0f, -1.0f,
+            1.0f, 1.0f,
+            -1.0f, 1.0f
+        };
+
+        static const float coordData[] = {
+            0.0f, 0.0f,
+            1.0f, 0.0f,
+            1.0f, 1.0f,
+            0.0f, 1.0f
+        };
+
+        OpenGL::render_begin(destination);
+
+        fs_program.use(wf::TEXTURE_TYPE_RGBA);
+        GL_CALL(glBindTexture(GL_TEXTURE_2D, source.tex));
+        GL_CALL(glActiveTexture(GL_TEXTURE0));
+
+        fs_program.attrib_pointer("position", 2, 0, vertexData);
+        fs_program.attrib_pointer("texcoord", 2, 0, coordData);
+        fs_program.uniformMatrix4f("mvp", glm::mat4(1.0));
+
+        GL_CALL(glDisable(GL_BLEND));
+        GL_CALL(glDrawArrays(GL_TRIANGLE_FAN, 0, 4));
+        GL_CALL(glEnable(GL_BLEND));
+        GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
+
+        fs_program.deactivate();
+        OpenGL::render_end();
+    }
+
     void fini() override
     {
         ipc_repo->unregister_method("wf/filters/set-view-shader");
         ipc_repo->unregister_method("wf/filters/unset-view-shader");
         ipc_repo->unregister_method("wf/filters/view-has-shader");
+        ipc_repo->unregister_method("wf/filters/set-fs-shader");
+        ipc_repo->unregister_method("wf/filters/unset-fs-shader");
+        ipc_repo->unregister_method("wf/filters/fs-has-shader");
 
         remove_transformers();
+        for (auto &output : wf::get_core().output_layout->get_outputs())
+        {
+            output->render->rem_post(&hook);
+            output->render->damage_whole();
+        }
     }
 };
 }

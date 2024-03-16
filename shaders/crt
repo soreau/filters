@@ -1,0 +1,23 @@
+#version 100
+
+precision mediump float;
+
+uniform sampler2D in_tex;
+varying mediump vec2 uvpos;
+
+void main()
+{
+    vec4 c = texture2D(in_tex, uvpos);
+    if (mod(gl_FragCoord.x - 0.5, 3.0) == 0.0 || mod(gl_FragCoord.y - 0.5, 3.0) == 0.0)
+    {
+        c.r *= 0.75;
+        c.g *= 0.75;
+        c.b *= 0.75;
+    } else
+    {
+        c.r *= 1.25;
+        c.g *= 1.25;
+        c.b *= 1.25;
+    }
+    gl_FragColor = c;
+}
