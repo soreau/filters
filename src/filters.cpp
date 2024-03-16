@@ -228,6 +228,7 @@ class wayfire_filters : public wf::plugin_interface_t
     {
         if (view->get_transformed_node()->get_transformer(transformer_name))
         {
+            LOGI("Removing shader and transformer.");
             view->get_transformed_node()->rem_transformer(transformer_name);
         }
     }
@@ -273,13 +274,16 @@ class wayfire_filters : public wf::plugin_interface_t
             if (transformers[view]->program.get_program_id(wf::TEXTURE_TYPE_RGBA) == 0)
             {
                 pop_transformer(view);
+                LOGE("Failed to compile shader.");
                 return wf::ipc::json_error("Failed to compile shader.");
             }
         } else
         {
+            LOGE("Failed to find view with given id. Maybe it isn't mapped?");
             return wf::ipc::json_error("Failed to find view with given id. Maybe it isn't mapped?");
         }
 
+        LOGI("Successfully compiled and applied shader.");
         return wf::ipc::json_ok();
     };
 
@@ -288,7 +292,7 @@ class wayfire_filters : public wf::plugin_interface_t
         WFJSON_EXPECT_FIELD(data, "view-id", number_unsigned);
 
         auto view = wf::ipc::find_view_by_id(data["view-id"]);
-        if (view && view->is_mapped())
+        if (view)
         {
             pop_transformer(view);
         }
