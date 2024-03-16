@@ -1,0 +1,7 @@
+<?xml version="1.0"?>
+<wayfire>
+	<plugin name="filters">
+		<_short>Shader Filters</_short>
+		<_long>Apply shaders to view surfaces by id via ipc.</_long>
+	</plugin>
+</wayfire>

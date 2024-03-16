@@ -1,0 +1,21 @@
+#version 100
+@builtin_ext@
+@builtin@
+
+precision mediump float;
+
+varying mediump vec2 uvpos;
+
+void main()
+{
+    vec4 c = get_pixel(uvpos);
+    // Invert
+    c.r = 1.0 - c.r;
+    c.g = 1.0 - c.g;
+    c.b = 1.0 - c.b;
+    if (c.a <= 0.5)
+    {
+        c.r = c.g = c.b = 0.0;
+    }
+    gl_FragColor = c;
+}

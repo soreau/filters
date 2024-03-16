@@ -1,0 +1,1 @@
+install_data( 'filters.xml', install_dir: wayfire.get_variable( pkgconfig: 'metadatadir' ) )
