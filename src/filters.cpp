@@ -246,6 +246,7 @@ class wayfire_filters : public wf::plugin_interface_t
     {
         ipc_repo->register_method("wf/filters/set-view-shader", ipc_set_view_shader);
         ipc_repo->register_method("wf/filters/unset-view-shader", ipc_unset_view_shader);
+        ipc_repo->register_method("wf/filters/view-has-shader", ipc_view_has_shader);
     }
 
     std::shared_ptr<wf_filters> ensure_transformer(wayfire_view view, std::string shader_path)
@@ -284,6 +285,7 @@ class wayfire_filters : public wf::plugin_interface_t
         }
 
         LOGI("Successfully compiled and applied shader.");
+        view->damage();
         return wf::ipc::json_ok();
     };
 
@@ -295,15 +297,32 @@ class wayfire_filters : public wf::plugin_interface_t
         if (view)
         {
             pop_transformer(view);
+            view->damage();
         }
 
         return wf::ipc::json_ok();
+    };
+
+    wf::ipc::method_callback ipc_view_has_shader = [=] (nlohmann::json data) -> nlohmann::json
+    {
+        WFJSON_EXPECT_FIELD(data, "view-id", number_unsigned);
+
+        auto view = wf::ipc::find_view_by_id(data["view-id"]);
+        if (!view)
+        {
+            return wf::ipc::json_error("Failed to find view with given id.");
+        }
+        auto tmgr = view->get_transformed_node();
+        auto response = wf::ipc::json_ok();
+        response["has-shader"] = tmgr->get_transformer<wf::scene::node_t>(transformer_name) ? true : false;
+        return response;
     };
 
     void fini() override
     {
         ipc_repo->unregister_method("wf/filters/set-view-shader");
         ipc_repo->unregister_method("wf/filters/unset-view-shader");
+        ipc_repo->unregister_method("wf/filters/view-has-shader");
 
         remove_transformers();
     }
