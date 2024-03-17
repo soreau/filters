@@ -55,19 +55,21 @@ class WayfireSocket:
         message["data"]["view-id"] = view_id
         return self.send_json(message)
 
-    def set_fs_shader(self, output_name: int, shader: str):
+    def set_fs_shader(self, output_name: str, shader: str):
         message = get_msg_template("wf/filters/set-fs-shader")
         message["data"] = {}
         message["data"]["output-name"] = output_name
         message["data"]["shader-path"] = shader
         return self.send_json(message)
 
-    def unset_fs_shaders(self):
+    def unset_fs_shader(self, output_name: str):
         message = get_msg_template("wf/filters/unset-fs-shader")
         message["data"] = {}
+        message["data"]["output-name"] = output_name
         return self.send_json(message)
 
-    def fs_has_shader(self):
+    def fs_has_shader(self, output_name: str):
         message = get_msg_template("wf/filters/fs-has-shader")
         message["data"] = {}
+        message["data"]["output-name"] = output_name
         return self.send_json(message)

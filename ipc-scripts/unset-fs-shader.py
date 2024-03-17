@@ -12,4 +12,4 @@ addr = os.getenv('WAYFIRE_SOCKET')
 
 commands_sock = WayfireSocket(addr)
 
-commands_sock.set_fs_shader(str(sys.argv[1]), str(sys.argv[2]))
+commands_sock.unset_fs_shader(str(sys.argv[1]))
