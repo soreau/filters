@@ -293,9 +293,10 @@ class wayfire_filters : public wf::plugin_interface_t
                     OpenGL::render_begin();
                     fs_programs[output]->program.free_resources();
                     OpenGL::render_end();
-                    fs_programs[output] = nullptr;
+                } else
+                {
+                    fs_programs[output] = std::make_shared<program_info>();
                 }
-                fs_programs[output] = std::make_shared<program_info>();
                 break;
             }
         }
@@ -329,6 +330,7 @@ class wayfire_filters : public wf::plugin_interface_t
                 if (fs_programs[output]->active)
                 {
                     LOGI("Successfully compiled and applied fullscreen shader to output: ", data["output-name"]);
+                    output->render->damage_whole();
                     return wf::ipc::json_ok();
                 }
 
@@ -468,6 +470,7 @@ class wayfire_filters : public wf::plugin_interface_t
             fs_programs[output]->program.attrib_pointer("position", 2, 0, vertexData);
             fs_programs[output]->program.attrib_pointer("texcoord", 2, 0, coordData);
             fs_programs[output]->program.uniformMatrix4f("mvp", glm::mat4(1.0));
+            fs_programs[output]->program.uniform1i("in_tex", 0);
 
             GL_CALL(glDisable(GL_BLEND));
             GL_CALL(glDrawArrays(GL_TRIANGLE_FAN, 0, 4));
