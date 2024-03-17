@@ -2,7 +2,7 @@
 <wayfire>
 	<plugin name="filters">
 		<_short>Shader Filters</_short>
-		<_long>Apply shaders to view surfaces by id via ipc.</_long>
+		<_long>Apply shaders via ipc.</_long>
 		<category>Effects</category>
 	</plugin>
 </wayfire>
