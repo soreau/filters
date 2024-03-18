@@ -510,6 +510,8 @@ class wayfire_filters : public wf::plugin_interface_t,
 
     void fini() override
     {
+        per_output_tracker_mixin_t::fini_output_tracking();
+
         ipc_repo->unregister_method("wf/filters/set-view-shader");
         ipc_repo->unregister_method("wf/filters/unset-view-shader");
         ipc_repo->unregister_method("wf/filters/view-has-shader");
