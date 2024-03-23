@@ -24,7 +24,6 @@
 
 #include <string>
 #include <fstream>
-#include <streambuf>
 #include <wayfire/core.hpp>
 #include <wayfire/view.hpp>
 #include <wayfire/plugin.hpp>
@@ -170,7 +169,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
             /* Render it to target */
             target.bind();
-            GL_CALL(glViewport(x, fb_geom.height - y - h, w, h));
+            GL_CALL(glViewport(x, target.viewport_height - y - h, w, h));
 
             GL_CALL(glEnable(GL_BLEND));
             GL_CALL(glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA));
