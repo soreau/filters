@@ -89,7 +89,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
   public:
     OpenGL::program_t program;
-    class simple_node_render_instance_t : public wf::scene::transformer_render_instance_t<node_t>
+    class simple_node_render_instance_t : public wf::scene::transformer_render_instance_t<transformer_base_node_t>
     {
         wf::signal::connection_t<node_damage_signal> on_node_damaged =
             [=] (node_damage_signal *ev)
@@ -103,7 +103,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
       public:
         simple_node_render_instance_t(wf_filters *self, damage_callback push_damage,
-            wayfire_view view) : wf::scene::transformer_render_instance_t<node_t>(self,
+            wayfire_view view) : wf::scene::transformer_render_instance_t<transformer_base_node_t>(self,
                 push_damage,
                 view->get_output())
         {
@@ -158,7 +158,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             OpenGL::render_begin(target);
 
             /* Upload data to shader */
-            auto src_tex = wf::scene::transformer_render_instance_t<node_t>::get_texture(
+            auto src_tex = wf::scene::transformer_render_instance_t<transformer_base_node_t>::get_texture(
                 1.0);
             this->self->shader->use(src_tex.type);
             this->self->shader->attrib_pointer("position", 2, 0, vertexData);
@@ -277,9 +277,12 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
     {
         output->render->rem_post(&hook);
         output->render->damage_whole();
-        OpenGL::render_begin();
-        program->free_resources();
-        OpenGL::render_end();
+        if (program)
+        {
+            OpenGL::render_begin();
+            program->free_resources();
+            OpenGL::render_end();
+        }
         program = nullptr;
         active = false;
         return wf::ipc::json_ok();
@@ -334,9 +337,12 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
     {
         output->render->rem_post(&hook);
         output->render->damage_whole();
-        OpenGL::render_begin();
-        program->free_resources();
-        OpenGL::render_end();
+        if (program)
+        {
+            OpenGL::render_begin();
+            program->free_resources();
+            OpenGL::render_end();
+        }
     }
 };
 
