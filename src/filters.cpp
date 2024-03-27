@@ -189,6 +189,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
             this->self->shader->deactivate();
             OpenGL::render_end();
+            wf::scene::damage_node(this->self, this->self->get_children_bounding_box());
         }
     };
 
