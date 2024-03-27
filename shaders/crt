@@ -1,13 +1,16 @@
-#version 100
+#version 300 es
+@builtin_ext@
+@builtin@
 
 precision mediump float;
 
 uniform sampler2D in_tex;
-varying mediump vec2 uvpos;
+out vec4 out_color;
+in mediump vec2 uvpos;
 
 void main()
 {
-    vec4 c = texture2D(in_tex, uvpos);
+    vec4 c = get_pixel(uvpos);
     if (mod(gl_FragCoord.x - 0.5, 3.0) == 0.0 || mod(gl_FragCoord.y - 0.5, 3.0) == 0.0)
     {
         c.r *= 0.75;
@@ -19,5 +22,5 @@ void main()
         c.g *= 1.25;
         c.b *= 1.25;
     }
-    gl_FragColor = c;
+    out_color = c;
 }

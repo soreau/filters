@@ -40,12 +40,12 @@
 
 static const char *vertex_shader =
     R"(
-#version 100
+#version 300 es
 
-attribute mediump vec2 position;
-attribute mediump vec2 texcoord;
+in mediump vec2 position;
+in mediump vec2 texcoord;
 
-varying mediump vec2 uvpos;
+out mediump vec2 uvpos;
 
 uniform mat4 mvp;
 
@@ -164,6 +164,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             this->self->shader->attrib_pointer("position", 2, 0, vertexData);
             this->self->shader->attrib_pointer("texcoord", 2, 0, texCoords);
             this->self->shader->uniformMatrix4f("mvp", target.transform);
+            this->self->shader->uniform1i("in_tex", 0);
             GL_CALL(glActiveTexture(GL_TEXTURE0));
             this->self->shader->set_active_texture(src_tex);
 
@@ -296,7 +297,7 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
     };
 
     void render(const wf::framebuffer_t& source,
-        const wf::framebuffer_t& destination)
+        const wf::framebuffer_t& target)
     {
         static const float vertexData[] = {
             -1.0f, -1.0f,
@@ -304,32 +305,40 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
             1.0f, 1.0f,
             -1.0f, 1.0f
         };
-
-        static const float coordData[] = {
+        static const float texCoords[] = {
             0.0f, 0.0f,
             1.0f, 0.0f,
             1.0f, 1.0f,
             0.0f, 1.0f
         };
 
-        OpenGL::render_begin(destination);
+        OpenGL::render_begin(target);
 
+        /* Upload data to shader */
         program->use(wf::TEXTURE_TYPE_RGBA);
-        GL_CALL(glBindTexture(GL_TEXTURE_2D, source.tex));
-        GL_CALL(glActiveTexture(GL_TEXTURE0));
-
         program->attrib_pointer("position", 2, 0, vertexData);
-        program->attrib_pointer("texcoord", 2, 0, coordData);
+        program->attrib_pointer("texcoord", 2, 0, texCoords);
         program->uniformMatrix4f("mvp", glm::mat4(1.0));
         program->uniform1i("in_tex", 0);
+        GL_CALL(glActiveTexture(GL_TEXTURE0));
+        program->set_active_texture(source.tex);
 
-        GL_CALL(glDisable(GL_BLEND));
-        GL_CALL(glDrawArrays(GL_TRIANGLE_FAN, 0, 4));
+        /* Render it to target */
+        target.bind();
+        GL_CALL(glViewport(0, 0, target.viewport_width, target.viewport_height));
+
         GL_CALL(glEnable(GL_BLEND));
+        GL_CALL(glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA));
+
+        GL_CALL(glDrawArrays(GL_TRIANGLE_FAN, 0, 4));
+
+        /* Disable stuff */
+        GL_CALL(glDisable(GL_BLEND));
+        GL_CALL(glActiveTexture(GL_TEXTURE0));
         GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
+        GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
 
         program->deactivate();
-
         OpenGL::render_end();
     }
 

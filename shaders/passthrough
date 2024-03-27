@@ -1,12 +1,15 @@
-#version 100
+#version 300 es
+@builtin_ext@
+@builtin@
 
 precision mediump float;
 
 uniform sampler2D in_tex;
-varying mediump vec2 uvpos;
+out vec4 out_color;
+in mediump vec2 uvpos;
 
 void main()
 {
-    vec4 c = texture2D(in_tex, uvpos);
-    gl_FragColor = c;
+    vec4 c = get_pixel(uvpos);
+    out_color = c;
 }
