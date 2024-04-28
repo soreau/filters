@@ -25,4 +25,8 @@ To unset shader on output with output-name:
 
 `./ipc-scripts/unset-fs-shader.py <output-name>`
 
-Hint: View ID can be obtained with [wf-info](https://github.com/soreau/wf-info).
+Hints:
+
+View ID can be obtained with [wf-info](https://github.com/soreau/wf-info).
+
+Requires ipc plugin to function.
