@@ -7,6 +7,7 @@ precision mediump float;
 uniform sampler2D in_tex;
 out vec4 out_color;
 in mediump vec2 uvpos;
+uniform float progress;
 
 // Shader adapted from: https://www.shadertoy.com/view/Xltfzj
 
@@ -24,6 +25,7 @@ void main()
     vec2 r = radius / s;
     vec2 uv = uvpos;
     vec4 c = get_pixel(uv);
+    vec4 oc = c;
 
     for (float d = 0.0; d < PI_2; d += PI_2 / directions)
     {
@@ -34,5 +36,5 @@ void main()
     }
 
     c /= quality * directions - 15.0;
-    out_color = c;
+    out_color = mix(oc, c, progress);
 }

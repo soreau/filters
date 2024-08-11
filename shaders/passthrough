@@ -7,9 +7,13 @@ precision mediump float;
 uniform sampler2D in_tex;
 out vec4 out_color;
 in mediump vec2 uvpos;
+// progress is for fade in/out
+uniform float progress;
 
 void main()
 {
     vec4 c = get_pixel(uvpos);
-    out_color = c;
+    vec4 oc = c;
+    // pointless, because the two colors are the same
+    out_color = mix(oc, c, progress);
 }

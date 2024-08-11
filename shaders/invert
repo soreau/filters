@@ -7,10 +7,12 @@ precision mediump float;
 uniform sampler2D in_tex;
 out vec4 out_color;
 in mediump vec2 uvpos;
+uniform float progress;
 
 void main()
 {
     vec4 c = get_pixel(uvpos);
+    vec4 oc = c;
     // Invert
     c.r = 1.0 - c.r;
     c.g = 1.0 - c.g;
@@ -18,5 +20,5 @@ void main()
     c.r *= c.a;
     c.g *= c.a;
     c.b *= c.a;
-    out_color = c;
+    out_color = mix(oc, c, progress);
 }

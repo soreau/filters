@@ -7,10 +7,12 @@ precision mediump float;
 uniform sampler2D in_tex;
 out vec4 out_color;
 in mediump vec2 uvpos;
+uniform float progress;
 
 void main()
 {
     vec4 c = get_pixel(uvpos);
+    vec4 oc = c;
     ivec2 size = textureSize(in_tex, 0);
     vec2 texelSize = 1.0 / vec2(size);
     vec4 border_color = vec4(0.0, 1.0, 0.0, 1.0);
@@ -57,5 +59,5 @@ void main()
             c = border_color;
         }
     }
-    out_color = c;
+    out_color = mix(oc, c, progress);
 }

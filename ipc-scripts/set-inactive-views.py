@@ -32,12 +32,14 @@ last_active_view_id = active_view_id
 while True:
     try:
         msg = sock.read_next_event()
+        if "event" in msg:
+            active_view_id = sock.get_focused_view()["id"]
+            if last_active_view_id != active_view_id:
+                wpe.filters_set_view_shader(last_active_view_id, os.path.abspath(str(sys.argv[1])))
+                wpe.filters_unset_view_shader(active_view_id)
+            last_active_view_id = active_view_id
     except KeyboardInterrupt:
         unset_view_shaders()
         exit(0)
-    if "event" in msg:
-        active_view_id = sock.get_focused_view()["id"]
-        if last_active_view_id != active_view_id:
-            wpe.filters_set_view_shader(last_active_view_id, os.path.abspath(str(sys.argv[1])))
-            wpe.filters_unset_view_shader(active_view_id)
-        last_active_view_id = active_view_id
+    except:
+        pass

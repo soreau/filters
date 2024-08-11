@@ -28,6 +28,7 @@
 #include <wayfire/view.hpp>
 #include <wayfire/plugin.hpp>
 #include <wayfire/output.hpp>
+#include <wayfire/util/duration.hpp>
 #include <wayfire/render-manager.hpp>
 #include <wayfire/view-transform.hpp>
 #include <wayfire/per-output-plugin.hpp>
@@ -57,22 +58,22 @@ void main() {
 )";
 
 // Supplied via ipc
-//static const char *fragment_shader =
-//    R"(
-//#version 100
-//@builtin_ext@
-//@builtin@
+// static const char *fragment_shader =
+// R"(
+// #version 100
+// @builtin_ext@
+// @builtin@
 //
-//precision mediump float;
+// precision mediump float;
 //
-//varying mediump vec2 uvpos;
+// varying mediump vec2 uvpos;
 //
-//void main()
-//{
-//    vec4 c = get_pixel(uvpos);
-//    gl_FragColor = c;
-//}
-//)";
+// void main()
+// {
+// vec4 c = get_pixel(uvpos);
+// gl_FragColor = c;
+// }
+// )";
 
 namespace wf
 {
@@ -85,7 +86,9 @@ const std::string transformer_name = "filters";
 class wf_filters : public wf::scene::view_2d_transformer_t
 {
     wayfire_view view;
+    wf::output_t *output;
     OpenGL::program_t *shader;
+    std::unique_ptr<wf::animation::simple_animation_t> fade;
 
   public:
     OpenGL::program_t program;
@@ -114,8 +117,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
         }
 
         ~simple_node_render_instance_t()
-        {
-        }
+        {}
 
         void schedule_instructions(
             std::vector<render_instruction_t>& instructions,
@@ -164,6 +166,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             this->self->shader->attrib_pointer("position", 2, 0, vertexData);
             this->self->shader->attrib_pointer("texcoord", 2, 0, texCoords);
             this->self->shader->uniformMatrix4f("mvp", target.transform);
+            this->self->shader->uniform1f("progress", *self->fade);
             this->self->shader->uniform1i("in_tex", 0);
             GL_CALL(glActiveTexture(GL_TEXTURE0));
             this->self->shader->set_active_texture(src_tex);
@@ -189,21 +192,63 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
             this->self->shader->deactivate();
             OpenGL::render_end();
-            wf::scene::damage_node(this->self, this->self->get_children_bounding_box());
         }
     };
 
     wf_filters(wayfire_view view, std::string shader_path) : wf::scene::view_2d_transformer_t(view)
     {
-        this->view    = view;
+        this->view   = view;
         this->shader = &program;
+        view->connect(&on_view_unmapped);
+        if (view->get_output())
+        {
+            output = view->get_output();
+            output->render->add_effect(&pre_hook, wf::OUTPUT_EFFECT_PRE);
+        }
 
         std::ifstream t(shader_path);
         std::string fragment_shader((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
         OpenGL::render_begin();
         program.compile(vertex_shader, fragment_shader);
         OpenGL::render_end();
+        fade = std::make_unique<wf::animation::simple_animation_t>(wf::create_option<int>(700));
+        fade->set(0.0, 0.0);
+        fade->animate(1.0);
     }
+
+    void unapply()
+    {
+        fade->animate(0.0);
+    }
+
+    void pop_transformer(wayfire_view view)
+    {
+        fini();
+        if (view->get_transformed_node()->get_transformer(transformer_name))
+        {
+            LOGI("Removing shader and transformer.");
+            view->get_transformed_node()->rem_transformer(transformer_name);
+        }
+    }
+
+    wf::signal::connection_t<wf::view_unmapped_signal> on_view_unmapped = [=] (wf::view_unmapped_signal *ev)
+    {
+        pop_transformer(view);
+    };
+
+    wf::effect_hook_t pre_hook = [=] ()
+    {
+        if (fade->running())
+        {
+            for (auto & v : wf::get_core().get_all_views())
+            {
+                v->damage();
+            }
+        } else if (fade->end == 0.0)
+        {
+            pop_transformer(view);
+        }
+    };
 
     void gen_render_instances(std::vector<render_instance_uptr>& instances,
         damage_callback push_damage, wf::output_t *shown_on) override
@@ -212,16 +257,28 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             this, push_damage, view));
     }
 
-    virtual ~wf_filters()
+    void fini()
     {
+        on_view_unmapped.disconnect();
         OpenGL::render_begin();
         program.free_resources();
         OpenGL::render_end();
+        fade.reset();
+        if (output)
+        {
+            output->render->rem_effect(&pre_hook);
+        }
+    }
+
+    virtual ~wf_filters()
+    {
+        fini();
     }
 };
 
 class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
 {
+    std::unique_ptr<wf::animation::simple_animation_t> fade;
     std::shared_ptr<OpenGL::program_t> program = nullptr;
     wf::post_hook_t hook;
     bool active = false;
@@ -234,7 +291,35 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
         {
             render(source, destination);
         };
+        fade = std::make_unique<wf::animation::simple_animation_t>(wf::create_option<int>(700));
+        fade->set(0.0, 0.0);
     }
+
+    wf::effect_hook_t pre_hook = [=] ()
+    {
+        if (fade->running())
+        {
+            output->render->damage_whole();
+            for (auto & v : wf::get_core().get_all_views())
+            {
+                v->damage();
+            }
+        } else if (fade->end == 0.0)
+        {
+            output->render->rem_effect(&pre_hook);
+            output->render->rem_post(&hook);
+            output->render->damage_whole();
+            if (program)
+            {
+                OpenGL::render_begin();
+                program->free_resources();
+                OpenGL::render_end();
+            }
+
+            program = nullptr;
+            active  = false;
+        }
+    };
 
     nlohmann::json set_fs_shader(std::string shader)
     {
@@ -260,6 +345,7 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
             program = nullptr;
             return wf::ipc::json_error("Failed to compile fullscreen shader.");
         }
+
         output->render->damage_whole();
 
         if (active)
@@ -269,33 +355,26 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
         }
 
         output->render->add_post(&hook);
+        output->render->add_effect(&pre_hook, wf::OUTPUT_EFFECT_PRE);
+        fade->animate(1.0);
         active = true;
 
         LOGI("Successfully compiled and applied fullscreen shader to output: ", output->to_string());
         return wf::ipc::json_ok();
-    };
+    }
 
     nlohmann::json unset_fs_shader()
     {
-        output->render->rem_post(&hook);
-        output->render->damage_whole();
-        if (program)
-        {
-            OpenGL::render_begin();
-            program->free_resources();
-            OpenGL::render_end();
-        }
-        program = nullptr;
-        active = false;
+        fade->animate(0.0);
         return wf::ipc::json_ok();
-    };
+    }
 
     nlohmann::json fs_has_shader()
     {
         auto response = wf::ipc::json_ok();
         response["has-shader"] = active;
         return response;
-    };
+    }
 
     void render(const wf::framebuffer_t& source,
         const wf::framebuffer_t& target)
@@ -320,6 +399,7 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
         program->attrib_pointer("position", 2, 0, vertexData);
         program->attrib_pointer("texcoord", 2, 0, texCoords);
         program->uniformMatrix4f("mvp", glm::mat4(1.0));
+        program->uniform1f("progress", *fade);
         program->uniform1i("in_tex", 0);
         GL_CALL(glActiveTexture(GL_TEXTURE0));
         program->set_active_texture(source.tex);
@@ -345,6 +425,7 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
 
     void fini() override
     {
+        output->render->rem_effect(&pre_hook);
         output->render->rem_post(&hook);
         output->render->damage_whole();
         if (program)
@@ -353,6 +434,8 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
             program->free_resources();
             OpenGL::render_end();
         }
+
+        fade.reset();
     }
 };
 
@@ -405,9 +488,9 @@ class wayfire_filters : public wf::plugin_interface_t,
     std::shared_ptr<wf_filters> ensure_transformer(wayfire_view view, std::string shader_path)
     {
         auto tmgr = view->get_transformed_node();
-        if (tmgr->get_transformer<wf::scene::node_t>(transformer_name))
+        if (tmgr->get_transformer<wf_filters>(transformer_name))
         {
-            pop_transformer(view);
+            view->get_transformed_node()->rem_transformer(transformer_name);
         }
 
         auto node = std::make_shared<wf_filters>(view, shader_path);
@@ -422,7 +505,7 @@ class wayfire_filters : public wf::plugin_interface_t,
         WFJSON_EXPECT_FIELD(data, "shader-path", string);
 
         auto view = wf::ipc::find_view_by_id(data["view-id"]);
-        if (view && view->is_mapped())
+        if (view)
         {
             transformers[view] = ensure_transformer(view, data["shader-path"]);
             if (transformers[view]->program.get_program_id(wf::TEXTURE_TYPE_RGBA) == 0)
@@ -449,8 +532,12 @@ class wayfire_filters : public wf::plugin_interface_t,
         auto view = wf::ipc::find_view_by_id(data["view-id"]);
         if (view)
         {
-            pop_transformer(view);
-            view->damage();
+            auto tmgr = view->get_transformed_node();
+            if (auto tr = tmgr->get_transformer<wf_filters>(transformer_name))
+            {
+                tr->unapply();
+                view->damage();
+            }
         }
 
         return wf::ipc::json_ok();
@@ -465,7 +552,8 @@ class wayfire_filters : public wf::plugin_interface_t,
         {
             return wf::ipc::json_error("Failed to find view with given id.");
         }
-        auto tmgr = view->get_transformed_node();
+
+        auto tmgr     = view->get_transformed_node();
         auto response = wf::ipc::json_ok();
         response["has-shader"] = tmgr->get_transformer<wf::scene::node_t>(transformer_name) ? true : false;
         return response;
@@ -473,13 +561,14 @@ class wayfire_filters : public wf::plugin_interface_t,
 
     wf::output_t *find_output_by_name(std::string name)
     {
-        for (auto &output : wf::get_core().output_layout->get_outputs())
+        for (auto & output : wf::get_core().output_layout->get_outputs())
         {
             if (output->to_string() == name)
             {
                 return output;
             }
         }
+
         return nullptr;
     }
 
