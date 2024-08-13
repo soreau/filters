@@ -223,7 +223,6 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
     void pop_transformer(wayfire_view view)
     {
-        fini();
         if (view->get_transformed_node()->get_transformer(transformer_name))
         {
             LOGI("Removing shader and transformer.");
@@ -257,7 +256,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             this, push_damage, view));
     }
 
-    void fini()
+    virtual ~wf_filters()
     {
         on_view_unmapped.disconnect();
         OpenGL::render_begin();
@@ -268,11 +267,6 @@ class wf_filters : public wf::scene::view_2d_transformer_t
         {
             output->render->rem_effect(&pre_hook);
         }
-    }
-
-    virtual ~wf_filters()
-    {
-        fini();
     }
 };
 
@@ -442,7 +436,6 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
 class wayfire_filters : public wf::plugin_interface_t,
     public wf::per_output_tracker_mixin_t<wayfire_per_output_filters>
 {
-    std::map<wayfire_view, std::shared_ptr<wf_filters>> transformers;
     wf::shared_data::ref_ptr_t<wf::ipc::method_repository_t> ipc_repo;
 
     void pop_transformer(wayfire_view view)
@@ -507,8 +500,8 @@ class wayfire_filters : public wf::plugin_interface_t,
         auto view = wf::ipc::find_view_by_id(data["view-id"]);
         if (view)
         {
-            transformers[view] = ensure_transformer(view, data["shader-path"]);
-            if (transformers[view]->program.get_program_id(wf::TEXTURE_TYPE_RGBA) == 0)
+            auto tr = ensure_transformer(view, data["shader-path"]);
+            if (tr->program.get_program_id(wf::TEXTURE_TYPE_RGBA) == 0)
             {
                 pop_transformer(view);
                 LOGE("Failed to compile shader.");
