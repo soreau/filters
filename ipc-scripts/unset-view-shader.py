@@ -2,10 +2,10 @@
 
 import os
 import sys
-from wayfire_socket import *
+from wayfire import WayfireSocket
+from wayfire.extra.wpe import WPE
 
-addr = os.getenv('WAYFIRE_SOCKET')
+sock = WayfireSocket()
+wpe = WPE(sock)
 
-commands_sock = WayfireSocket(addr)
-
-commands_sock.unset_view_shader(int(sys.argv[1]))
+wpe.unset_view_shader(int(sys.argv[1]))

@@ -2,14 +2,14 @@
 
 import os
 import sys
-from wayfire_socket import *
+from wayfire import WayfireSocket
+from wayfire.extra.wpe import WPE
 
 if len(sys.argv) < 3:
     print("Required arguments: <Output name> </path/to/shader>")
     exit(-1)
 
-addr = os.getenv('WAYFIRE_SOCKET')
+sock = WayfireSocket()
+wpe = WPE(sock)
 
-commands_sock = WayfireSocket(addr)
-
-commands_sock.set_fs_shader(str(sys.argv[1]), os.path.abspath(str(sys.argv[2])))
+wpe.set_fs_shader(str(sys.argv[1]), os.path.abspath(str(sys.argv[2])))

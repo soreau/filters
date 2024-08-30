@@ -19,14 +19,14 @@ sock.watch(['view-focused'])
 
 def unset_view_shaders():
     for view in sock.list_views():
-        wpe.filters_unset_view_shader(view["id"])
+        wpe.unset_view_shader(view["id"])
 
 active_view_id = sock.get_focused_view()["id"]
 active_view_app_id = sock.get_focused_view()["app-id"]
 for view in sock.list_views():
     view_id = view["id"]
     if view_id != active_view_id and view["app-id"] != "panel":
-        wpe.filters_set_view_shader(view_id, os.path.abspath(str(sys.argv[1])))
+        wpe.set_view_shader(view_id, os.path.abspath(str(sys.argv[1])))
 last_active_view_id = active_view_id
 last_active_view_app_id = active_view_app_id
 
@@ -37,8 +37,8 @@ while True:
             active_view_id = sock.get_focused_view()["id"]
             active_view_app_id = sock.get_focused_view()["app-id"]
             if last_active_view_id != active_view_id and last_active_view_app_id != "panel":
-                wpe.filters_set_view_shader(last_active_view_id, os.path.abspath(str(sys.argv[1])))
-                wpe.filters_unset_view_shader(active_view_id)
+                wpe.set_view_shader(last_active_view_id, os.path.abspath(str(sys.argv[1])))
+                wpe.unset_view_shader(active_view_id)
             last_active_view_id = active_view_id
             last_active_view_app_id = active_view_app_id
     except KeyboardInterrupt:

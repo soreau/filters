@@ -7,6 +7,10 @@ $ ninja -C build
 # ninja -C build install
 ```
 
+## Requirements
+
+Install [pywayfire](https://github.com/WayfireWM/pywayfire) with pip.
+
 ## Usage
 
 To set shader on view with view-id:
