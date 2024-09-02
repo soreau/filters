@@ -5,7 +5,7 @@ import sys
 from wayfire import WayfireSocket
 from wayfire.extra.wpe import WPE
 
-sock = WayfireSocket(addr)
+sock = WayfireSocket()
 wpe = WPE(sock)
 
-print(f'View {sys.argv[1]} has shader: {commands_sock.view_has_shader(int(sys.argv[1]))["has-shader"]}')
+print(f'View {sys.argv[1]} has shader: {wpe.view_has_shader(int(sys.argv[1]))["has-shader"]}')
