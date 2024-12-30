@@ -75,6 +75,23 @@ void main() {
 // }
 // )";
 
+static std::string pixdecor_custom_data_name = "wf-decoration-shadow-margin";
+
+class wf_shadow_margin_t : public wf::custom_data_t
+{
+  public:
+    wf::decoration_margins_t get_margins()
+    {
+        return margins;
+    }
+    void set_margins(wf::decoration_margins_t margins)
+    {
+        this->margins = margins;
+    }
+  private:
+    wf::decoration_margins_t margins = {0, 0, 0, 0};
+};
+
 namespace wf
 {
 namespace scene
@@ -168,6 +185,31 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             this->self->shader->uniformMatrix4f("mvp", target.transform);
             this->self->shader->uniform1f("progress", *self->fade);
             this->self->shader->uniform1i("in_tex", 0);
+
+            if (auto toplevel = wf::toplevel_cast(this->view))
+            {
+                auto bg = view->get_surface_root_node()->get_bounding_box();
+                auto vg = toplevel->get_geometry();
+                auto margins = glm::vec4{vg.x - bg.x, vg.y - bg.y, bg.width - ((vg.x - bg.x) + vg.width), bg.height - ((vg.y - bg.y) + vg.height)};
+                if (view->has_data(pixdecor_custom_data_name))
+                {
+                    auto decoration_margins = view->get_data<wf_shadow_margin_t>(pixdecor_custom_data_name)->get_margins();
+                    margins.x += decoration_margins.left;
+                    margins.y += decoration_margins.bottom;
+                    margins.z += decoration_margins.right;
+                    margins.w += decoration_margins.top;
+                }
+                // XXX: Pad the margins if there are none, so that the shader renders on the surface
+                if (bg == vg)
+                {
+                    margins.x += 2.0;
+                    margins.y += 2.0;
+                    margins.z += 2.0;
+                    margins.w += 2.0;
+                }
+                this->self->shader->uniform4f("margins", margins);
+            }
+
             GL_CALL(glActiveTexture(GL_TEXTURE0));
             this->self->shader->set_active_texture(src_tex);
 
@@ -189,6 +231,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             GL_CALL(glActiveTexture(GL_TEXTURE0));
             GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
             GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
+            GL_CALL(glViewport(0, 0, target.viewport_width, target.viewport_height));
 
             this->self->shader->deactivate();
             OpenGL::render_end();
