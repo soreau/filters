@@ -84,10 +84,12 @@ class wf_shadow_margin_t : public wf::custom_data_t
     {
         return margins;
     }
+
     void set_margins(wf::decoration_margins_t margins)
     {
         this->margins = margins;
     }
+
   private:
     wf::decoration_margins_t margins = {0, 0, 0, 0};
 };
@@ -190,15 +192,19 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             {
                 auto bg = view->get_surface_root_node()->get_bounding_box();
                 auto vg = toplevel->get_geometry();
-                auto margins = glm::vec4{vg.x - bg.x, vg.y - bg.y, bg.width - ((vg.x - bg.x) + vg.width), bg.height - ((vg.y - bg.y) + vg.height)};
+                auto margins =
+                    glm::vec4{vg.x - bg.x, vg.y - bg.y, bg.width - ((vg.x - bg.x) + vg.width),
+                    bg.height - ((vg.y - bg.y) + vg.height)};
                 if (view->has_data(pixdecor_custom_data_name))
                 {
-                    auto decoration_margins = view->get_data<wf_shadow_margin_t>(pixdecor_custom_data_name)->get_margins();
+                    auto decoration_margins =
+                        view->get_data<wf_shadow_margin_t>(pixdecor_custom_data_name)->get_margins();
                     margins.x += decoration_margins.left;
                     margins.y += decoration_margins.bottom;
                     margins.z += decoration_margins.right;
                     margins.w += decoration_margins.top;
                 }
+
                 // XXX: Pad the margins if there are none, so that the shader renders on the surface
                 if (bg == vg)
                 {
@@ -207,6 +213,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
                     margins.z += 2.0;
                     margins.w += 2.0;
                 }
+
                 this->self->shader->uniform4f("margins", margins);
             }
 
