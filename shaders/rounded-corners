@@ -1,0 +1,95 @@
+#version 300 es
+@builtin_ext@
+@builtin@
+
+precision mediump float;
+
+uniform sampler2D in_tex;
+out vec4 out_color;
+in mediump vec2 uvpos;
+uniform float progress;
+uniform vec4 margins;
+
+void main()
+{
+    vec4 c = get_pixel(uvpos);
+    vec2 uv = uvpos;
+    vec4 m = margins;
+    vec4 oc = c;
+    vec4 shadow_color = vec4(0.0, 0.0, 0.2, 0.5);
+    ivec2 size = textureSize(in_tex, 0);
+    vec2 texelSize = 1.0 / vec2(size);
+    m.x *= texelSize.x; // left
+    m.y *= texelSize.y; // top
+    m.z *= texelSize.x; // right
+    m.w *= texelSize.y; // bottom
+    vec4 border_color = vec4(0.1, 0.1, 0.1, 1.0);
+    float border_size = 1.0;
+    float corner_radius = 15.0;
+    float shadow_radius = 12.0;
+    float d;
+    float diffuse = 1.0 / max(shadow_radius / 2.0, 1.0);
+
+    // Edges
+    if ((((uv.x >= m.x - texelSize.x * border_size && uv.x <= m.x) || (uv.x <= 1.0 - (m.z - texelSize.x * border_size) && uv.x >= 1.0 - m.z)) &&
+        (uv.y > texelSize.y * (corner_radius - border_size) + m.w && uv.y < 1.0 - texelSize.y * (corner_radius - border_size) - m.y)) ||
+        (((uv.y >= m.w - texelSize.y * border_size && uv.y <= m.w) || (uv.y <= 1.0 - (m.y - texelSize.y * border_size) && uv.y >= 1.0 - m.y)) &&
+        (uv.x > texelSize.x * (corner_radius - border_size) + m.x && uv.x < 1.0 - texelSize.x * (corner_radius - border_size) - m.z)))
+    {
+        c = border_color;
+    } else
+    // Corners
+    if (uv.x <= texelSize.x * (corner_radius - border_size) + m.x && uv.y <= texelSize.y * (corner_radius - border_size) + m.w)
+    {
+        // Bottom Left
+        d = distance(vec2(corner_radius - border_size) + vec2(margins.x, margins.w), uv * vec2(size));
+        if (d - corner_radius <= 0.0)
+        {
+            if (d - (corner_radius - border_size) >= 0.0)
+            {
+                c = border_color;
+            }
+        } else
+            c = vec4(0.0);
+    } else if (uv.x >= 1.0 - m.z - texelSize.x * (corner_radius - border_size) && uv.y <= texelSize.y * (corner_radius - border_size) + m.w)
+    {
+        // Bottom Right
+        d = distance(vec2(float(size.x) - (corner_radius - border_size) - margins.z, (corner_radius - border_size) + margins.w), uv * vec2(size));
+        if (d - corner_radius <= 0.0)
+        {
+            if (d - (corner_radius - border_size) >= 0.0)
+            {
+                c = border_color;
+            }
+        } else
+            c = vec4(0.0);
+    } else if (uv.x <= texelSize.x * (corner_radius - border_size) + m.x && uv.y >= 1.0 - texelSize.y * (corner_radius - border_size) - m.y)
+    {
+        // Top Left
+        d = distance(vec2((corner_radius - border_size) + margins.x, float(size.y) - (corner_radius - border_size) - margins.y), uv * vec2(size));
+        if (d - corner_radius <= 0.0)
+        {
+            if (d - (corner_radius - border_size) >= 0.0)
+            {
+                c = border_color;
+            }
+        } else
+            c = vec4(0.0);
+    } else if (uv.x >= 1.0 - texelSize.x * (corner_radius - border_size) - m.x && uv.y >= 1.0 - texelSize.y * (corner_radius - border_size) - m.y)
+    {
+        // Top Right
+        d = distance(vec2(vec2(size) - (corner_radius - border_size) - vec2(margins.z, margins.y)), uv * vec2(size));
+        if (d - corner_radius <= 0.0)
+        {
+            if (d - (corner_radius - border_size) >= 0.0)
+            {
+                c = border_color;
+            }
+        } else
+            c = vec4(0.0);
+    } else if (uv.x < m.x || uv.x > 1.0 - m.z || uv.y < m.w || uv.y > 1.0 - m.y)
+    {
+        c = vec4(0.0);
+    }
+    out_color = mix(oc, c, progress);
+}
