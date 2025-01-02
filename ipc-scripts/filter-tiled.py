@@ -15,24 +15,31 @@ sock = WayfireSocket()
 wpe = WPE(sock)
 sock.watch()
 
+def toggle_filter(view):
+    try:
+        if view["tiled-edges"] == 0:
+            if wpe.view_has_shader(int(view["id"]))["has-shader"] is False:
+                wpe.set_view_shader(int(view["id"]), os.path.abspath(str(sys.argv[1])))
+        else:
+            if wpe.view_has_shader(int(view["id"]))["has-shader"] is True:
+                wpe.unset_view_shader(int(view["id"]))
+    except:
+        pass
+
 views = sock.list_views()
 for view in views:
-    if view["tiled-edges"] == 0:
-        wpe.set_view_shader(int(view["id"]), os.path.abspath(str(sys.argv[1])))
-    else:
-        wpe.unset_view_shader(int(view["id"]))
-    
+    toggle_filter(view)
 
 while True:
     try:
         msg = sock.read_next_event()
         if "event" in msg and "view" in msg and (msg["view"] is not None):
-            if msg["view"]["tiled-edges"] == 0:
-                wpe.set_view_shader(int(msg["view"]["id"]), os.path.abspath(str(sys.argv[1])))
-            else:
-                wpe.unset_view_shader(int(msg["view"]["id"]))
+            toggle_filter(msg["view"])
     except KeyboardInterrupt:
         views = sock.list_views()
         for view in views:
-            wpe.unset_view_shader(int(view["id"]))
+            try:
+                wpe.unset_view_shader(int(view["id"]))
+            except:
+                pass
         exit(0)
