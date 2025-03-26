@@ -365,7 +365,7 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
         }
     };
 
-    nlohmann::json set_fs_shader(std::string shader)
+    wf::json_t set_fs_shader(std::string shader)
     {
         if (program)
         {
@@ -407,13 +407,13 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
         return wf::ipc::json_ok();
     }
 
-    nlohmann::json unset_fs_shader()
+    wf::json_t unset_fs_shader()
     {
         fade->animate(0.0);
         return wf::ipc::json_ok();
     }
 
-    nlohmann::json fs_has_shader()
+    wf::json_t fs_has_shader()
     {
         auto response = wf::ipc::json_ok();
         response["has-shader"] = active;
@@ -542,15 +542,15 @@ class wayfire_filters : public wf::plugin_interface_t,
         return tmgr->get_transformer<wf_filters>(transformer_name);
     }
 
-    wf::ipc::method_callback ipc_set_view_shader = [=] (nlohmann::json data) -> nlohmann::json
+    wf::ipc::method_callback ipc_set_view_shader = [=] (wf::json_t data) -> wf::json_t
     {
-        WFJSON_EXPECT_FIELD(data, "view-id", number_unsigned);
-        WFJSON_EXPECT_FIELD(data, "shader-path", string);
+        auto view_id     = wf::ipc::json_get_uint64(data, "view-id");
+        auto shader_path = wf::ipc::json_get_string(data, "shader-path");
 
-        auto view = wf::ipc::find_view_by_id(data["view-id"]);
+        auto view = wf::ipc::find_view_by_id(view_id);
         if (view)
         {
-            auto tr = ensure_transformer(view, data["shader-path"]);
+            auto tr = ensure_transformer(view, shader_path);
             if (tr->program.get_program_id(wf::TEXTURE_TYPE_RGBA) == 0)
             {
                 pop_transformer(view);
@@ -568,11 +568,11 @@ class wayfire_filters : public wf::plugin_interface_t,
         return wf::ipc::json_ok();
     };
 
-    wf::ipc::method_callback ipc_unset_view_shader = [=] (nlohmann::json data) -> nlohmann::json
+    wf::ipc::method_callback ipc_unset_view_shader = [=] (wf::json_t data) -> wf::json_t
     {
-        WFJSON_EXPECT_FIELD(data, "view-id", number_unsigned);
+        auto view_id = wf::ipc::json_get_uint64(data, "view-id");
 
-        auto view = wf::ipc::find_view_by_id(data["view-id"]);
+        auto view = wf::ipc::find_view_by_id(view_id);
         if (view)
         {
             auto tmgr = view->get_transformed_node();
@@ -586,11 +586,11 @@ class wayfire_filters : public wf::plugin_interface_t,
         return wf::ipc::json_ok();
     };
 
-    wf::ipc::method_callback ipc_view_has_shader = [=] (nlohmann::json data) -> nlohmann::json
+    wf::ipc::method_callback ipc_view_has_shader = [=] (wf::json_t data) -> wf::json_t
     {
-        WFJSON_EXPECT_FIELD(data, "view-id", number_unsigned);
+        auto view_id = wf::ipc::json_get_uint64(data, "view-id");
 
-        auto view = wf::ipc::find_view_by_id(data["view-id"]);
+        auto view = wf::ipc::find_view_by_id(view_id);
         if (!view)
         {
             return wf::ipc::json_error("Failed to find view with given id.");
@@ -615,25 +615,25 @@ class wayfire_filters : public wf::plugin_interface_t,
         return nullptr;
     }
 
-    wf::ipc::method_callback ipc_set_fs_shader = [=] (nlohmann::json data) -> nlohmann::json
+    wf::ipc::method_callback ipc_set_fs_shader = [=] (wf::json_t data) -> wf::json_t
     {
-        WFJSON_EXPECT_FIELD(data, "output-name", string);
-        WFJSON_EXPECT_FIELD(data, "shader-path", string);
+        auto output_name = wf::ipc::json_get_string(data, "output-name");
+        auto shader_path = wf::ipc::json_get_string(data, "shader-path");
 
-        auto output = find_output_by_name(data["output-name"]);
+        auto output = find_output_by_name(output_name);
         if (!output)
         {
             return wf::ipc::json_error("No such output");
         }
 
-        return this->output_instance[output]->set_fs_shader(data["shader-path"]);
+        return this->output_instance[output]->set_fs_shader(shader_path);
     };
 
-    wf::ipc::method_callback ipc_unset_fs_shader = [=] (nlohmann::json data) -> nlohmann::json
+    wf::ipc::method_callback ipc_unset_fs_shader = [=] (wf::json_t data) -> wf::json_t
     {
-        WFJSON_EXPECT_FIELD(data, "output-name", string);
+        auto output_name = wf::ipc::json_get_string(data, "output-name");
 
-        auto output = find_output_by_name(data["output-name"]);
+        auto output = find_output_by_name(output_name);
         if (!output)
         {
             return wf::ipc::json_error("No such output");
@@ -642,11 +642,11 @@ class wayfire_filters : public wf::plugin_interface_t,
         return this->output_instance[output]->unset_fs_shader();
     };
 
-    wf::ipc::method_callback ipc_fs_has_shader = [=] (nlohmann::json data) -> nlohmann::json
+    wf::ipc::method_callback ipc_fs_has_shader = [=] (wf::json_t data) -> wf::json_t
     {
-        WFJSON_EXPECT_FIELD(data, "output-name", string);
+        auto output_name = wf::ipc::json_get_string(data, "output-name");
 
-        auto output = find_output_by_name(data["output-name"]);
+        auto output = find_output_by_name(output_name);
         if (!output)
         {
             return wf::ipc::json_error("No such output");
