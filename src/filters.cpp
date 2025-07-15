@@ -246,7 +246,6 @@ class wf_filters : public wf::scene::view_2d_transformer_t
     {
         this->view   = view;
         this->shader = &program;
-        view->connect(&on_view_unmapped);
         if (view->get_output())
         {
             output = view->get_output();
@@ -278,11 +277,6 @@ class wf_filters : public wf::scene::view_2d_transformer_t
         }
     }
 
-    wf::signal::connection_t<wf::view_unmapped_signal> on_view_unmapped = [=] (wf::view_unmapped_signal *ev)
-    {
-        pop_transformer(view);
-    };
-
     wf::effect_hook_t pre_hook = [=] ()
     {
         if (fade->running())
@@ -306,7 +300,6 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
     virtual ~wf_filters()
     {
-        on_view_unmapped.disconnect();
         wf::gles::run_in_context([&]
         {
             program.free_resources();
