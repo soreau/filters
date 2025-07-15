@@ -28,6 +28,7 @@
 #include <wayfire/view.hpp>
 #include <wayfire/plugin.hpp>
 #include <wayfire/output.hpp>
+#include <wayfire/opengl.hpp>
 #include <wayfire/util/duration.hpp>
 #include <wayfire/render-manager.hpp>
 #include <wayfire/view-transform.hpp>
@@ -150,12 +151,11 @@ class wf_filters : public wf::scene::view_2d_transformer_t
                         });
         }
 
-        void render(const wf::render_target_t& target,
-            const wf::region_t& region)
+        void render(const wf::scene::render_instruction_t& data)
         {
             wlr_box fb_geom =
-                target.framebuffer_box_from_geometry_box(target.geometry);
-            auto view_box = target.framebuffer_box_from_geometry_box(
+                data.target.framebuffer_box_from_geometry_box(data.target.geometry);
+            auto view_box = data.target.framebuffer_box_from_geometry_box(
                 self->get_children_bounding_box());
             view_box.x -= fb_geom.x;
             view_box.y -= fb_geom.y;
@@ -176,72 +176,69 @@ class wf_filters : public wf::scene::view_2d_transformer_t
                 0.0f, 1.0f
             };
 
-            OpenGL::render_begin(target);
-
-            /* Upload data to shader */
-            auto src_tex = wf::scene::transformer_render_instance_t<transformer_base_node_t>::get_texture(
-                1.0);
-            this->self->shader->use(src_tex.type);
-            this->self->shader->attrib_pointer("position", 2, 0, vertexData);
-            this->self->shader->attrib_pointer("texcoord", 2, 0, texCoords);
-            this->self->shader->uniformMatrix4f("mvp", target.transform);
-            this->self->shader->uniform1f("progress", *self->fade);
-            this->self->shader->uniform1i("in_tex", 0);
-
-            if (auto toplevel = wf::toplevel_cast(this->view))
+            auto src_tex = wf::gles_texture_t{get_texture(1.0)};
+            data.pass->custom_gles_subpass(data.target,[&]
             {
-                auto bg = view->get_surface_root_node()->get_bounding_box();
-                auto vg = toplevel->get_geometry();
-                auto margins =
-                    glm::vec4{vg.x - bg.x, vg.y - bg.y, bg.width - ((vg.x - bg.x) + vg.width),
-                    bg.height - ((vg.y - bg.y) + vg.height)};
-                if (view->has_data(pixdecor_custom_data_name))
+                this->self->shader->use(src_tex.type);
+                this->self->shader->attrib_pointer("position", 2, 0, vertexData);
+                this->self->shader->attrib_pointer("texcoord", 2, 0, texCoords);
+                this->self->shader->uniformMatrix4f("mvp", wf::gles::output_transform(data.target));
+                this->self->shader->uniform1f("progress", *self->fade);
+                this->self->shader->uniform1i("in_tex", 0);
+
+                if (auto toplevel = wf::toplevel_cast(this->view))
                 {
-                    auto decoration_margins =
-                        view->get_data<wf_shadow_margin_t>(pixdecor_custom_data_name)->get_margins();
-                    margins.x += decoration_margins.left;
-                    margins.y += decoration_margins.bottom;
-                    margins.z += decoration_margins.right;
-                    margins.w += decoration_margins.top;
+                    auto bg = view->get_surface_root_node()->get_bounding_box();
+                    auto vg = toplevel->get_geometry();
+                    auto margins =
+                        glm::vec4{vg.x - bg.x, vg.y - bg.y, bg.width - ((vg.x - bg.x) + vg.width),
+                        bg.height - ((vg.y - bg.y) + vg.height)};
+                    if (view->has_data(pixdecor_custom_data_name))
+                    {
+                        auto decoration_margins =
+                            view->get_data<wf_shadow_margin_t>(pixdecor_custom_data_name)->get_margins();
+                        margins.x += decoration_margins.left;
+                        margins.y += decoration_margins.bottom;
+                        margins.z += decoration_margins.right;
+                        margins.w += decoration_margins.top;
+                    }
+
+                    // XXX: Pad the margins if there are none, so that the shader renders on the surface
+                    if (bg == vg)
+                    {
+                        margins.x += 2.0;
+                        margins.y += 2.0;
+                        margins.z += 2.0;
+                        margins.w += 2.0;
+                    }
+
+                    this->self->shader->uniform4f("margins", margins);
                 }
 
-                // XXX: Pad the margins if there are none, so that the shader renders on the surface
-                if (bg == vg)
+                GL_CALL(glActiveTexture(GL_TEXTURE0));
+                this->self->shader->set_active_texture(src_tex);
+
+                /* Render it to target */
+                wf::gles::bind_render_buffer(data.target);
+                GL_CALL(glViewport(x, y, w, h));
+
+                GL_CALL(glEnable(GL_BLEND));
+                GL_CALL(glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA));
+
+                for (const auto& box : data.damage)
                 {
-                    margins.x += 2.0;
-                    margins.y += 2.0;
-                    margins.z += 2.0;
-                    margins.w += 2.0;
+                    wf::gles::render_target_logic_scissor(data.target, wlr_box_from_pixman_box(box));
+                    GL_CALL(glDrawArrays(GL_TRIANGLE_FAN, 0, 4));
                 }
 
-                this->self->shader->uniform4f("margins", margins);
-            }
+                /* Disable stuff */
+                GL_CALL(glDisable(GL_BLEND));
+                GL_CALL(glActiveTexture(GL_TEXTURE0));
+                GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
+                GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
 
-            GL_CALL(glActiveTexture(GL_TEXTURE0));
-            this->self->shader->set_active_texture(src_tex);
-
-            /* Render it to target */
-            target.bind();
-            GL_CALL(glViewport(x, target.viewport_height - y - h, w, h));
-
-            GL_CALL(glEnable(GL_BLEND));
-            GL_CALL(glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA));
-
-            for (const auto& box : region)
-            {
-                target.logic_scissor(wlr_box_from_pixman_box(box));
-                GL_CALL(glDrawArrays(GL_TRIANGLE_FAN, 0, 4));
-            }
-
-            /* Disable stuff */
-            GL_CALL(glDisable(GL_BLEND));
-            GL_CALL(glActiveTexture(GL_TEXTURE0));
-            GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
-            GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
-            GL_CALL(glViewport(0, 0, target.viewport_width, target.viewport_height));
-
-            this->self->shader->deactivate();
-            OpenGL::render_end();
+                this->self->shader->deactivate();
+            });
         }
     };
 
@@ -258,9 +255,10 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
         std::ifstream t(shader_path);
         std::string fragment_shader((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
-        OpenGL::render_begin();
-        program.compile(vertex_shader, fragment_shader);
-        OpenGL::render_end();
+        wf::gles::run_in_context([&]
+        {
+            program.compile(vertex_shader, fragment_shader);
+        });
         fade = std::make_unique<wf::animation::simple_animation_t>(wf::create_option<int>(700));
         fade->set(0.0, 0.0);
         fade->animate(1.0);
@@ -309,9 +307,10 @@ class wf_filters : public wf::scene::view_2d_transformer_t
     virtual ~wf_filters()
     {
         on_view_unmapped.disconnect();
-        OpenGL::render_begin();
-        program.free_resources();
-        OpenGL::render_end();
+        wf::gles::run_in_context([&]
+        {
+            program.free_resources();
+        });
         fade.reset();
         if (output)
         {
@@ -330,10 +329,9 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
   public:
     void init() override
     {
-        hook = [=] (const wf::framebuffer_t& source,
-                    const wf::framebuffer_t& destination)
+        hook = [=] (wf::auxilliary_buffer_t& aux_buf, const wf::render_buffer_t& render_buf)
         {
-            render(source, destination);
+            render(aux_buf, render_buf);
         };
         fade = std::make_unique<wf::animation::simple_animation_t>(wf::create_option<int>(700));
         fade->set(0.0, 0.0);
@@ -355,9 +353,10 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
             output->render->damage_whole();
             if (program)
             {
-                OpenGL::render_begin();
-                program->free_resources();
-                OpenGL::render_end();
+                wf::gles::run_in_context([&]
+                {
+                    program->free_resources();
+                });
             }
 
             program = nullptr;
@@ -369,9 +368,10 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
     {
         if (program)
         {
-            OpenGL::render_begin();
-            program->free_resources();
-            OpenGL::render_end();
+            wf::gles::run_in_context([&]
+            {
+                program->free_resources();
+            });
         } else
         {
             program = std::make_shared<OpenGL::program_t>();
@@ -379,9 +379,10 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
 
         std::ifstream t(shader);
         std::string fragment_shader((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
-        OpenGL::render_begin();
-        program->compile(vertex_shader, fragment_shader);
-        OpenGL::render_end();
+        wf::gles::run_in_context([&]
+        {
+            program->compile(vertex_shader, fragment_shader);
+        });
         if (program->get_program_id(wf::TEXTURE_TYPE_RGBA) == 0)
         {
             LOGE("Failed to compile fullscreen shader.");
@@ -420,8 +421,7 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
         return response;
     }
 
-    void render(const wf::framebuffer_t& source,
-        const wf::framebuffer_t& target)
+    void render(wf::auxilliary_buffer_t& aux_buf, const wf::render_buffer_t& render_buf)
     {
         static const float vertexData[] = {
             -1.0f, -1.0f,
@@ -430,41 +430,41 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
             -1.0f, 1.0f
         };
         static const float texCoords[] = {
-            0.0f, 0.0f,
-            1.0f, 0.0f,
+            0.0f, 1.0f,
             1.0f, 1.0f,
-            0.0f, 1.0f
+            1.0f, 0.0f,
+            0.0f, 0.0f
         };
 
-        OpenGL::render_begin(target);
+        wf::gles::run_in_context([&]
+        {
+            /* Upload data to shader */
+            program->use(wf::TEXTURE_TYPE_RGBA);
+            program->attrib_pointer("position", 2, 0, vertexData);
+            program->attrib_pointer("texcoord", 2, 0, texCoords);
+            program->uniformMatrix4f("mvp", glm::mat4(1.0));
+            program->uniform1f("progress", *fade);
+            program->uniform1i("in_tex", 0);
+            GL_CALL(glActiveTexture(GL_TEXTURE0));
+            program->set_active_texture(wf::gles_texture_t::from_aux(aux_buf));
 
-        /* Upload data to shader */
-        program->use(wf::TEXTURE_TYPE_RGBA);
-        program->attrib_pointer("position", 2, 0, vertexData);
-        program->attrib_pointer("texcoord", 2, 0, texCoords);
-        program->uniformMatrix4f("mvp", glm::mat4(1.0));
-        program->uniform1f("progress", *fade);
-        program->uniform1i("in_tex", 0);
-        GL_CALL(glActiveTexture(GL_TEXTURE0));
-        program->set_active_texture(source.tex);
+            /* Render it to aux_buf */
+            wf::gles::bind_render_buffer(render_buf);
+            GL_CALL(glViewport(0, 0, aux_buf.get_size().width, aux_buf.get_size().height));
 
-        /* Render it to target */
-        target.bind();
-        GL_CALL(glViewport(0, 0, target.viewport_width, target.viewport_height));
+            GL_CALL(glEnable(GL_BLEND));
+            GL_CALL(glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA));
 
-        GL_CALL(glEnable(GL_BLEND));
-        GL_CALL(glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA));
+            GL_CALL(glDrawArrays(GL_TRIANGLE_FAN, 0, 4));
 
-        GL_CALL(glDrawArrays(GL_TRIANGLE_FAN, 0, 4));
+            /* Disable stuff */
+            GL_CALL(glDisable(GL_BLEND));
+            GL_CALL(glActiveTexture(GL_TEXTURE0));
+            GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
+            GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
 
-        /* Disable stuff */
-        GL_CALL(glDisable(GL_BLEND));
-        GL_CALL(glActiveTexture(GL_TEXTURE0));
-        GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
-        GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
-
-        program->deactivate();
-        OpenGL::render_end();
+            program->deactivate();
+        });
     }
 
     void fini() override
@@ -474,9 +474,10 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
         output->render->damage_whole();
         if (program)
         {
-            OpenGL::render_begin();
-            program->free_resources();
-            OpenGL::render_end();
+            wf::gles::run_in_context([&]
+            {
+                program->free_resources();
+            });
         }
 
         fade.reset();
