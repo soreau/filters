@@ -1,0 +1,32 @@
+#version 300 es
+@builtin_ext@
+@builtin@
+
+precision mediump float;
+
+out vec4 out_color;
+in mediump vec2 uvpos;
+
+// threshold for keycolor
+float threshold = 0.65;
+
+// keycolor
+vec4 color = vec4(0.0, 0.0, 0.0, 0.7);
+
+// progress is for fade in/out
+uniform float progress;
+
+void main()
+{
+    vec4 c = get_pixel(uvpos);
+    vec4 vdiff = abs(vec4(color.rgb, 1.0) - vec4(c.rgb, 1.0));
+    float diff = max(max(max(vdiff.r, vdiff.g), vdiff.b), vdiff.a);
+    vec4 oc = c;
+    if (diff < threshold)
+    {
+        oc  *= color.a;
+        oc.a = color.a * c.a;
+    }
+
+    out_color = mix(c, oc, progress);
+}
