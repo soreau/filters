@@ -141,7 +141,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
         void schedule_instructions(
             std::vector<render_instruction_t>& instructions,
-            const wf::render_target_t& target, wf::region_t& damage)
+            const wf::render_target_t& target, wf::regionf_t& damage)
         {
             // We want to render ourselves only, the node does not have children
             instructions.push_back(render_instruction_t{
@@ -177,7 +177,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             };
 
             auto src_tex = wf::gles_texture_t{get_texture(1.0)};
-            data.pass->custom_gles_subpass(data.target,[&]
+            data.pass->custom_gles_subpass(data.target, [&]
             {
                 this->self->shader->use(src_tex.type);
                 this->self->shader->attrib_pointer("position", 2, 0, vertexData);
@@ -227,7 +227,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
                 for (const auto& box : data.damage)
                 {
-                    wf::gles::render_target_logic_scissor(data.target, wlr_box_from_pixman_box(box));
+                    wf::gles::render_target_logic_scissor(data.target, box);
                     GL_CALL(glDrawArrays(GL_TRIANGLE_FAN, 0, 4));
                 }
 
