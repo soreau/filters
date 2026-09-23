@@ -39,22 +39,69 @@
 #include <wayfire/plugins/common/shared-core-data.hpp>
 #include <wayfire/plugins/ipc/ipc-method-repository.hpp>
 
+#if WF_HAS_VULKANFX
+    #include <wayfire/vulkan.hpp>
+// Glslang C Interface headers for GLSL to SPIRV conversion
+    #include <glslang/Include/glslang_c_interface.h>
+    #include <glslang/Public/resource_limits_c.h>
+
+typedef struct
+{
+    uint32_t *words;
+    size_t size; // number of uint32_t words
+} SpirvBinary;
+#endif
+
 
 static const char *vertex_shader =
-    R"(
-#version 300 es
+    R"(#version 310 es
+#extension GL_ARB_shading_language_include : require
+#extension GL_EXT_scalar_block_layout : require
 
-in mediump vec2 position;
-in mediump vec2 texcoord;
+precision highp float;
 
-out mediump vec2 uvpos;
+// Texture rotation, matches wl_output_transform
+layout (constant_id = 1) const int TEXTURE_ROTATION = 0;
 
-uniform mat4 mvp;
+/**
+ * Apply texture rotation to the given UV coordinates, as well as scale them with a base and offset, which
+ * allows limiting texturing to a subset of the texture.
+ */
+vec2 transform_texture_uv(vec2 uv, vec2 scale, vec2 off) {
+    if (TEXTURE_ROTATION == 1) { // WL_OUTPUT_TRANSFORM_90
+        return vec2(1.0 - uv.y, uv.x) * scale + off;
+    } else if (TEXTURE_ROTATION == 2) { // WL_OUTPUT_TRANSFORM_180
+        return vec2(1.0 - uv.x, 1.0 - uv.y) * scale + off;
+    } else if (TEXTURE_ROTATION == 3) { // WL_OUTPUT_TRANSFORM_270
+        return vec2(uv.y, 1.0 - uv.x) * scale + off;
+    } else if (TEXTURE_ROTATION == 4) { // WL_OUTPUT_TRANSFORM_FLIPPED
+        return vec2(1.0 - uv.x, uv.y) * scale + off;
+    } else if (TEXTURE_ROTATION == 5) { // WL_OUTPUT_TRANSFORM_FLIPPED_90
+        return vec2(1.0 - uv.y, 1.0 - uv.x) * scale + off;
+    } else if (TEXTURE_ROTATION == 6) { // WL_OUTPUT_TRANSFORM_FLIPPED_180
+        return vec2(uv.x, 1.0 - uv.y) * scale + off;
+    } else if (TEXTURE_ROTATION == 7) { // WL_OUTPUT_TRANSFORM_FLIPPED_270
+        return vec2(uv.y, uv.x) * scale + off;
+    } else { // WL_OUTPUT_TRANSFORM_NORMAL
+        return uv * scale + off;
+    }
+}
+
+layout(location = 0) in highp vec2 position;
+layout(location = 1) in highp vec2 texcoord;
+
+layout(location = 0) out highp vec2 uvpos;
+
+layout(push_constant) uniform matrix_block {  mat4 mvp;
+    vec2 tex_scale;
+    vec2 tex_offset;
+                                            vec4 margins;
+                                            float progress;  } block;
 
 void main() {
 
-   gl_Position = mvp * vec4(position.xy, 0.0, 1.0);
-   uvpos = texcoord;
+   gl_Position = block.mvp * vec4(position.xy, 0.0, 1.0);
+   uvpos = transform_texture_uv(texcoord, block.tex_scale, block.tex_offset);
 }
 )";
 
@@ -108,12 +155,212 @@ class wf_filters : public wf::scene::view_2d_transformer_t
     wayfire_view view;
     wf::output_t *output;
     OpenGL::program_t *shader;
+    char *fragment_shader;
     std::unique_ptr<wf::animation::simple_animation_t> fade;
+    std::array<std::shared_ptr<wf::vk::gpu_buffer_t>, 4> vulkan_vertex_buffer;
 
   public:
     OpenGL::program_t program;
+
     class simple_node_render_instance_t : public wf::scene::transformer_render_instance_t<transformer_base_node_t>
     {
+#if WF_HAS_VULKANFX
+        class vulkan_state_t : public wf::custom_data_t
+        {
+          public:
+            std::shared_ptr<wf::vk::graphics_pipeline_t> pipeline;
+        };
+
+        struct vulkan_push_constants_t
+        {
+            alignas(16) glm::mat4 mvp;
+            alignas(8)  glm::vec2 uv_scale;
+            alignas(8)  glm::vec2 uv_offset;
+            alignas(16) glm::vec4 margins;
+            alignas(8)  float progress;
+        };
+
+        SpirvBinary compile_glsl_to_spirv(glslang_stage_t stage, const char *glsl_source)
+        {
+            SpirvBinary result = {.words = NULL, .size = 0};
+
+            // 1. Define the compilation input options
+            const glslang_input_t input = {
+                .language = GLSLANG_SOURCE_GLSL,
+                .stage    = stage,
+                .client   = GLSLANG_CLIENT_VULKAN,
+                .client_version  = GLSLANG_TARGET_VULKAN_1_3,       // Targeting Vulkan 1.3
+                .target_language = GLSLANG_TARGET_SPV,
+                .target_language_version = GLSLANG_TARGET_SPV_1_3, // SPIR-V 1.3
+                .code = glsl_source,
+                .default_version = 100,
+                .default_profile = GLSLANG_NO_PROFILE,
+                .force_default_version_and_profile = false,
+                .forward_compatible = false,
+                .messages = GLSLANG_MSG_DEFAULT_BIT,
+                .resource = glslang_default_resource() // Default hardware limits
+            };
+
+            // 2. Create the shader object instance
+            glslang_shader_t *shader = glslang_shader_create(&input);
+            if (!shader)
+            {
+                fprintf(stderr, "Failed to create glslang shader instance.\n");
+                return result;
+            }
+
+            // 3. Preprocess and Parse the shader string
+            if (!glslang_shader_preprocess(shader, &input) || !glslang_shader_parse(shader, &input))
+            {
+                fprintf(stderr, "Shader compilation failed!\n");
+                fprintf(stderr, "Info log:\n%s\n", glslang_shader_get_info_log(shader));
+                fprintf(stderr, "Debug log:\n%s\n", glslang_shader_get_info_debug_log(shader));
+                glslang_shader_delete(shader);
+                return result;
+            }
+
+            // 4. Create a program container and link the shader
+            glslang_program_t *program = glslang_program_create();
+            glslang_program_add_shader(program, shader);
+
+            if (!glslang_program_link(program, GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT))
+            {
+                fprintf(stderr, "Shader linking failed!\n");
+                fprintf(stderr, "Program info log:\n%s\n", glslang_program_get_info_log(program));
+                glslang_program_delete(program);
+                glslang_shader_delete(shader);
+                return result;
+            }
+
+            // 5. Generate the actual SPIR-V bytecode assembly
+            glslang_program_SPIRV_generate(program, stage);
+
+            size_t spirv_size = glslang_program_SPIRV_get_size(program);
+            if (spirv_size > 0)
+            {
+                result.words = (uint32_t*)malloc(spirv_size * sizeof(uint32_t));
+                result.size  = spirv_size;
+                glslang_program_SPIRV_get(program, result.words);
+            }
+
+            // 6. Inspect individual component messages if needed, then clean up code allocations
+            const char *spirv_messages = glslang_program_SPIRV_get_messages(program);
+            if (spirv_messages)
+            {
+                printf("SPIR-V Generation Messages:\n%s\n", spirv_messages);
+            }
+
+            glslang_program_delete(program);
+            glslang_shader_delete(shader);
+
+            return result;
+        }
+
+        vulkan_state_t& ensure_vk(wf::vulkan_render_state_t& state)
+        {
+            if (auto d = state.get_data<vulkan_state_t>())
+            {
+                return *d;
+            }
+
+            glslang_initialize_process();
+            VkShaderModule vs, fs;
+            SpirvBinary vert_binary = compile_glsl_to_spirv(GLSLANG_STAGE_VERTEX, vertex_shader);
+            SpirvBinary frag_binary = compile_glsl_to_spirv(GLSLANG_STAGE_FRAGMENT, self->fragment_shader);
+
+            if (vert_binary.words && frag_binary.words)
+            {
+                LOGI("Successfully generated SPIR-V vertex shader! Size: %zu words (%zu bytes).\n",
+                    vert_binary.size, vert_binary.size * sizeof(uint32_t));
+                LOGI("Successfully generated SPIR-V fragment shader! Size: %zu words (%zu bytes).\n",
+                    frag_binary.size, frag_binary.size * sizeof(uint32_t));
+
+                vs =
+                    state.get_context()->load_shader_module(vert_binary.words,
+                        vert_binary.size * sizeof(uint32_t));
+                fs =
+                    state.get_context()->load_shader_module(frag_binary.words,
+                        frag_binary.size * sizeof(uint32_t));
+
+                free(vert_binary.words);
+                free(frag_binary.words);
+                free(self->fragment_shader);
+            } else
+            {
+                LOGI("Compilation failed.\n");
+                free(vert_binary.words);
+                free(frag_binary.words);
+                free(self->fragment_shader);
+                glslang_finalize_process();
+                return *(new vulkan_state_t{});
+            }
+
+            glslang_finalize_process();
+
+            wf::vk::pipeline_params_t params{};
+            params.shaders = {
+                {.stage = VK_SHADER_STAGE_VERTEX_BIT, .shader = vs},
+                {.stage = VK_SHADER_STAGE_FRAGMENT_BIT, .shader = fs},
+            };
+
+            params.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
+            params.vertex_input_description = {{
+                .binding   = 0,
+                .stride    = sizeof(float) * 4,
+                .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+            }};
+            params.vertex_attribute_description = {
+                {
+                    .location = 0,
+                    .binding  = 0,
+                    .format   = VK_FORMAT_R32G32_SFLOAT,
+                    .offset   = 0,
+                },
+                {
+                    .location = 1,
+                    .binding  = 0,
+                    .format   = VK_FORMAT_R32G32_SFLOAT,
+                    .offset   = sizeof(float) * 2,
+                },
+            };
+
+            // One descriptor set for the texture.
+            params.descriptor_set_layouts = {wf::vk::pipeline_params_t::texture_descriptor_set_t{}};
+            params.push_constants = {
+                VkPushConstantRange{
+                    .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                    .offset     = 0,
+                    .size = sizeof(vulkan_push_constants_t),
+                },
+            };
+
+            auto data = std::make_unique<vulkan_state_t>();
+            data->pipeline = std::make_shared<wf::vk::graphics_pipeline_t>(state.get_context(), params);
+            auto ptr = data.get();
+            state.store_data<vulkan_state_t>(std::move(data));
+            return *ptr;
+        }
+
+        std::shared_ptr<wf::vk::gpu_buffer_t> find_buffer(
+            std::shared_ptr<wf::vk::context_t> ctx, VkDeviceSize total_size)
+        {
+            auto& buffers = self->vulkan_vertex_buffer;
+            for (size_t i = 0; i < buffers.size(); i++)
+            {
+                auto& buffer = buffers[i];
+                // Try to reuse the vertex buffer if possible, to avoid reallocations.
+                if (buffer && (buffer->get_size() >= total_size) && (buffer.use_count() == 1))
+                {
+                    return buffers[i];
+                }
+            }
+
+            buffers[0] = ctx->create_buffer(total_size,
+                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+            return buffers[0];
+        }
+
+#endif
         wf::signal::connection_t<node_damage_signal> on_node_damaged =
             [=] (node_damage_signal *ev)
         {
@@ -136,6 +383,11 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             self->connect(&on_node_damaged);
         }
 
+        void transform_damage_region(wf::regionf_t& damage) override
+        {
+            damage |= self->get_bounding_box();
+        }
+
         ~simple_node_render_instance_t()
         {}
 
@@ -153,6 +405,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
         void render(const wf::scene::render_instruction_t& data)
         {
+#if WF_HAS_VULKANFX
             wlr_box fb_geom =
                 data.target.framebuffer_box_from_geometry_box(data.target.geometry);
             auto view_box = data.target.framebuffer_box_from_geometry_box(
@@ -163,34 +416,17 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             float x = view_box.x, y = view_box.y, w = view_box.width,
                 h = view_box.height;
 
-            static const float vertexData[] = {
-                -1.0f, -1.0f,
-                1.0f, -1.0f,
-                1.0f, 1.0f,
-                -1.0f, 1.0f
-            };
-            static const float texCoords[] = {
-                0.0f, 0.0f,
-                1.0f, 0.0f,
-                1.0f, 1.0f,
-                0.0f, 1.0f
-            };
-
-            auto src_tex = wf::gles_texture_t{get_texture(1.0)};
-            data.pass->custom_gles_subpass(data.target, [&]
+            data.pass->custom_vulkan_subpass([&] (wf::vulkan_render_state_t& state,
+                                                  wf::vk::command_buffer_t& cmd_buf)
             {
-                this->self->shader->use(src_tex.type);
-                this->self->shader->attrib_pointer("position", 2, 0, vertexData);
-                this->self->shader->attrib_pointer("texcoord", 2, 0, texCoords);
-                this->self->shader->uniformMatrix4f("mvp", wf::gles::output_transform(data.target));
-                this->self->shader->uniform1f("progress", *self->fade);
-                this->self->shader->uniform1i("in_tex", 0);
+                auto& our_state = ensure_vk(state);
 
+                glm::vec4 margins{};
                 if (auto toplevel = wf::toplevel_cast(this->view))
                 {
                     auto bg = view->get_surface_root_node()->get_bounding_box();
                     auto vg = toplevel->get_geometry();
-                    auto margins =
+                    margins =
                         glm::vec4{vg.x - bg.x, vg.y - bg.y, bg.width - ((vg.x - bg.x) + vg.width),
                         bg.height - ((vg.y - bg.y) + vg.height)};
                     if (view->has_data(pixdecor_custom_data_name))
@@ -211,34 +447,66 @@ class wf_filters : public wf::scene::view_2d_transformer_t
                         margins.z += 2.0;
                         margins.w += 2.0;
                     }
-
-                    this->self->shader->uniform4f("margins", margins);
                 }
 
-                GL_CALL(glActiveTexture(GL_TEXTURE0));
-                this->self->shader->set_active_texture(src_tex);
+                std::vector<float> unified_buffer;
+                unified_buffer.push_back(x);
+                unified_buffer.push_back(y + h);
+                unified_buffer.push_back(0.0f);
+                unified_buffer.push_back(0.0f);
+                unified_buffer.push_back(x);
+                unified_buffer.push_back(y);
+                unified_buffer.push_back(0.0f);
+                unified_buffer.push_back(1.0f);
+                unified_buffer.push_back(x + w);
+                unified_buffer.push_back(y);
+                unified_buffer.push_back(1.0f);
+                unified_buffer.push_back(1.0f);
+                unified_buffer.push_back(x + w);
+                unified_buffer.push_back(y + h);
+                unified_buffer.push_back(1.0f);
+                unified_buffer.push_back(0.0f);
 
-                /* Render it to target */
-                wf::gles::bind_render_buffer(data.target);
-                GL_CALL(glViewport(x, y, w, h));
+                VkDeviceSize total_size = unified_buffer.size() * sizeof(float);
 
-                GL_CALL(glEnable(GL_BLEND));
-                GL_CALL(glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA));
+                auto buffer = find_buffer(state.get_context(), total_size);
+                buffer->write(unified_buffer.data(), total_size);
 
-                for (const auto& box : data.damage)
+                auto texture  = get_texture(data.target.scale);
+                auto tex_dset = state.get_descriptor_pool()->get_descriptor_set(cmd_buf, texture);
+                wf::vk::texture_sampling_params_t sampling{texture};
+
+                wf::vk::pipeline_specialization_t specialization{};
+                specialization.add_specialization_for_texture(texture);
+
+                auto [layout, _] = cmd_buf.bind_pipeline(our_state.pipeline, data.target, specialization);
+
+                cmd_buf.set_full_viewport(data.target);
+
+                cmd_buf.bind_texture(texture);
+
+                vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
+                    0, 1, &tex_dset, 0, nullptr);
+
+                vulkan_push_constants_t push_constants{};
+                push_constants.mvp = wf::vk::render_target_transform(data.target);
+                push_constants.uv_scale  = sampling.get_uv_scale();
+                push_constants.uv_offset = sampling.get_uv_offset();
+                push_constants.margins   = margins;
+                push_constants.progress  = float(*self->fade);
+                vkCmdPushConstants(cmd_buf, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                    0, sizeof(vulkan_push_constants_t), &push_constants);
+
+                cmd_buf.bind_buffer(buffer);
+                VkDeviceSize offset = 0;
+                vkCmdBindVertexBuffers(cmd_buf, 0, 1, &buffer->get_buffer(), &offset);
+
+                cmd_buf.for_each_scissor_rect(data.target, (data.damage & data.target.geometry), [&]
                 {
-                    wf::gles::render_target_logic_scissor(data.target, box);
-                    GL_CALL(glDrawArrays(GL_TRIANGLE_FAN, 0, 4));
-                }
-
-                /* Disable stuff */
-                GL_CALL(glDisable(GL_BLEND));
-                GL_CALL(glActiveTexture(GL_TEXTURE0));
-                GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
-                GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
-
-                this->self->shader->deactivate();
+                    vkCmdDraw(cmd_buf, 4, 1, 0, 0);
+                });
             });
+#endif
         }
     };
 
@@ -254,10 +522,9 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
         std::ifstream t(shader_path);
         std::string fragment_shader((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
-        wf::gles::run_in_context([&]
-        {
-            program.compile(vertex_shader, fragment_shader);
-        });
+#if WF_HAS_VULKANFX
+        this->fragment_shader = strdup(fragment_shader.c_str());
+#endif
         fade = std::make_unique<wf::animation::simple_animation_t>(wf::create_option<int>(700));
         fade->set(0.0, 0.0);
         fade->animate(1.0);
@@ -300,7 +567,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
     virtual ~wf_filters()
     {
-        wf::gles::run_in_context([&]
+        wf::gles::run_in_context_if_gles([&]
         {
             program.free_resources();
         });
@@ -346,7 +613,7 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
             output->render->damage_whole();
             if (program)
             {
-                wf::gles::run_in_context([&]
+                wf::gles::run_in_context_if_gles([&]
                 {
                     program->free_resources();
                 });
@@ -361,7 +628,7 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
     {
         if (program)
         {
-            wf::gles::run_in_context([&]
+            wf::gles::run_in_context_if_gles([&]
             {
                 program->free_resources();
             });
@@ -372,7 +639,7 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
 
         std::ifstream t(shader);
         std::string fragment_shader((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
-        wf::gles::run_in_context([&]
+        wf::gles::run_in_context_if_gles([&]
         {
             program->compile(vertex_shader, fragment_shader);
         });
@@ -429,7 +696,7 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
             0.0f, 0.0f
         };
 
-        wf::gles::run_in_context([&]
+        wf::gles::run_in_context_if_gles([&]
         {
             /* Upload data to shader */
             program->use(wf::TEXTURE_TYPE_RGBA);
@@ -467,7 +734,7 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
         output->render->damage_whole();
         if (program)
         {
-            wf::gles::run_in_context([&]
+            wf::gles::run_in_context_if_gles([&]
             {
                 program->free_resources();
             });
@@ -545,19 +812,9 @@ class wayfire_filters : public wf::plugin_interface_t,
         if (view)
         {
             auto tr = ensure_transformer(view, shader_path);
-            if (tr->program.get_program_id(wf::TEXTURE_TYPE_RGBA) == 0)
-            {
-                pop_transformer(view);
-                LOGE("Failed to compile shader.");
-                return wf::ipc::json_error("Failed to compile shader.");
-            }
-        } else
-        {
-            LOGE("Failed to find view with given id. Maybe it isn't mapped?");
-            return wf::ipc::json_error("Failed to find view with given id. Maybe it isn't mapped?");
         }
 
-        LOGI("Successfully compiled and applied shader.");
+        // LOGI("Successfully compiled and applied shader.");
         view->damage();
         return wf::ipc::json_ok();
     };
