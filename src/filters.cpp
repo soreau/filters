@@ -55,19 +55,24 @@ typedef struct
 
 static const char *vertex_shader =
     R"(#version 310 es
+#ifdef VULKAN
 #extension GL_ARB_shading_language_include : require
-#extension GL_EXT_scalar_block_layout : require
+#extension GL_EXT_shader_non_constant_global_initializers : require
+#endif
 
 precision highp float;
 
 // Texture rotation, matches wl_output_transform
-layout (constant_id = 1) const int TEXTURE_ROTATION = 0;
+const int TEXTURE_ROTATION = 0;
 
 /**
  * Apply texture rotation to the given UV coordinates, as well as scale them with a base and offset, which
  * allows limiting texturing to a subset of the texture.
  */
 vec2 transform_texture_uv(vec2 uv, vec2 scale, vec2 off) {
+#ifndef VULKAN
+    return uv;
+#endif
     if (TEXTURE_ROTATION == 1) { // WL_OUTPUT_TRANSFORM_90
         return vec2(1.0 - uv.y, uv.x) * scale + off;
     } else if (TEXTURE_ROTATION == 2) { // WL_OUTPUT_TRANSFORM_180
@@ -92,16 +97,22 @@ layout(location = 1) in highp vec2 texcoord;
 
 layout(location = 0) out highp vec2 uvpos;
 
-layout(push_constant) uniform matrix_block {  mat4 mvp;
-    vec2 tex_scale;
-    vec2 tex_offset;
-                                            vec4 margins;
-                                            float progress;  } block;
+#ifdef VULKAN
+layout(push_constant) uniform uniforms { mat4 mvp;
+                                         vec2 tex_scale;
+                                         vec2 tex_offset;
+                                         vec4 margins;
+                                         float progress; };
+#else
+uniform mat4 mvp;
+uniform vec2 tex_scale;
+uniform vec2 tex_offset;
+#endif
 
-void main() {
-
-   gl_Position = block.mvp * vec4(position.xy, 0.0, 1.0);
-   uvpos = transform_texture_uv(texcoord, block.tex_scale, block.tex_offset);
+void main()
+{
+    gl_Position = mvp * vec4(position.xy, 0.0, 1.0);
+    uvpos = transform_texture_uv(texcoord, tex_scale, tex_offset);
 }
 )";
 
@@ -198,7 +209,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
                 .force_default_version_and_profile = false,
                 .forward_compatible = false,
                 .messages = GLSLANG_MSG_DEFAULT_BIT,
-                .resource = glslang_default_resource() // Default hardware limits
+                .resource = glslang_default_resource(), // Default hardware limits
             };
 
             // 2. Create the shader object instance
@@ -405,7 +416,6 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
         void render(const wf::scene::render_instruction_t& data)
         {
-#if WF_HAS_VULKANFX
             wlr_box fb_geom =
                 data.target.framebuffer_box_from_geometry_box(data.target.geometry);
             auto view_box = data.target.framebuffer_box_from_geometry_box(
@@ -416,56 +426,108 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             float x = view_box.x, y = view_box.y, w = view_box.width,
                 h = view_box.height;
 
+            glm::vec4 margins{};
+            if (auto toplevel = wf::toplevel_cast(this->view))
+            {
+                auto bg = view->get_surface_root_node()->get_bounding_box();
+                auto vg = toplevel->get_geometry();
+                margins =
+                    glm::vec4{vg.x - bg.x, vg.y - bg.y, bg.width - ((vg.x - bg.x) + vg.width),
+                    bg.height - ((vg.y - bg.y) + vg.height)};
+                if (view->has_data(pixdecor_custom_data_name))
+                {
+                    auto decoration_margins =
+                        view->get_data<wf_shadow_margin_t>(pixdecor_custom_data_name)->get_margins();
+                    margins.x += decoration_margins.left;
+                    margins.y += decoration_margins.bottom;
+                    margins.z += decoration_margins.right;
+                    margins.w += decoration_margins.top;
+                }
+
+                // XXX: Pad the margins if there are none, so that the shader renders on the surface
+                if (bg == vg)
+                {
+                    margins.x += 2.0;
+                    margins.y += 2.0;
+                    margins.z += 2.0;
+                    margins.w += 2.0;
+                }
+            }
+
+            wf::gles::run_in_context_if_gles([&]
+            {
+                static const float vertexData[] = {
+                    -1.0f, -1.0f,
+                    1.0f, -1.0f,
+                    1.0f, 1.0f,
+                    -1.0f, 1.0f
+                };
+                static const float texCoords[] = {
+                    0.0f, 1.0f,
+                    1.0f, 1.0f,
+                    1.0f, 0.0f,
+                    0.0f, 0.0f
+                };
+
+                auto src_tex = wf::gles_texture_t{get_texture(1.0)};
+                data.pass->custom_gles_subpass(data.target, [&]
+                {
+                    this->self->shader->use(src_tex.type);
+                    this->self->shader->attrib_pointer("position", 2, 0, vertexData);
+                    this->self->shader->attrib_pointer("texcoord", 2, 0, texCoords);
+                    this->self->shader->uniformMatrix4f("mvp", wf::gles::output_transform(data.target));
+                    this->self->shader->uniform1f("progress", *self->fade);
+                    this->self->shader->uniform1i("in_tex", 0);
+                    this->self->shader->uniform4f("margins", margins);
+
+                    GL_CALL(glActiveTexture(GL_TEXTURE0));
+                    this->self->shader->set_active_texture(src_tex);
+
+                    /* Render it to target */
+                    wf::gles::bind_render_buffer(data.target);
+                    GL_CALL(glViewport(x, y, w, h));
+
+                    GL_CALL(glEnable(GL_BLEND));
+                    GL_CALL(glBlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA));
+
+                    wf::gles::for_each_scissor_rect(data.target, (data.damage & data.target.geometry), [&]
+                    {
+                        GL_CALL(glDrawArrays(GL_TRIANGLE_FAN, 0, 4));
+                    });
+
+                    /* Disable stuff */
+                    GL_CALL(glDisable(GL_BLEND));
+                    GL_CALL(glActiveTexture(GL_TEXTURE0));
+                    GL_CALL(glBindTexture(GL_TEXTURE_2D, 0));
+                    GL_CALL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
+
+                    this->self->shader->deactivate();
+                });
+            });
+
+#if WF_HAS_VULKANFX
             data.pass->custom_vulkan_subpass([&] (wf::vulkan_render_state_t& state,
                                                   wf::vk::command_buffer_t& cmd_buf)
             {
                 auto& our_state = ensure_vk(state);
 
-                glm::vec4 margins{};
-                if (auto toplevel = wf::toplevel_cast(this->view))
-                {
-                    auto bg = view->get_surface_root_node()->get_bounding_box();
-                    auto vg = toplevel->get_geometry();
-                    margins =
-                        glm::vec4{vg.x - bg.x, vg.y - bg.y, bg.width - ((vg.x - bg.x) + vg.width),
-                        bg.height - ((vg.y - bg.y) + vg.height)};
-                    if (view->has_data(pixdecor_custom_data_name))
-                    {
-                        auto decoration_margins =
-                            view->get_data<wf_shadow_margin_t>(pixdecor_custom_data_name)->get_margins();
-                        margins.x += decoration_margins.left;
-                        margins.y += decoration_margins.bottom;
-                        margins.z += decoration_margins.right;
-                        margins.w += decoration_margins.top;
-                    }
-
-                    // XXX: Pad the margins if there are none, so that the shader renders on the surface
-                    if (bg == vg)
-                    {
-                        margins.x += 2.0;
-                        margins.y += 2.0;
-                        margins.z += 2.0;
-                        margins.w += 2.0;
-                    }
-                }
-
                 std::vector<float> unified_buffer;
                 unified_buffer.push_back(x);
                 unified_buffer.push_back(y + h);
                 unified_buffer.push_back(0.0f);
-                unified_buffer.push_back(0.0f);
+                unified_buffer.push_back(1.0f);
                 unified_buffer.push_back(x);
                 unified_buffer.push_back(y);
                 unified_buffer.push_back(0.0f);
-                unified_buffer.push_back(1.0f);
+                unified_buffer.push_back(0.0f);
                 unified_buffer.push_back(x + w);
                 unified_buffer.push_back(y);
                 unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(1.0f);
+                unified_buffer.push_back(0.0f);
                 unified_buffer.push_back(x + w);
                 unified_buffer.push_back(y + h);
                 unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(0.0f);
+                unified_buffer.push_back(1.0f);
 
                 VkDeviceSize total_size = unified_buffer.size() * sizeof(float);
 
@@ -493,7 +555,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
                 push_constants.uv_scale  = sampling.get_uv_scale();
                 push_constants.uv_offset = sampling.get_uv_offset();
                 push_constants.margins   = margins;
-                push_constants.progress  = float(*self->fade);
+                push_constants.progress  = *self->fade;
                 vkCmdPushConstants(cmd_buf, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
                     0, sizeof(vulkan_push_constants_t), &push_constants);
 
@@ -522,6 +584,10 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
         std::ifstream t(shader_path);
         std::string fragment_shader((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
+        wf::gles::run_in_context_if_gles([&]
+        {
+            program.compile(vertex_shader, fragment_shader);
+        });
 #if WF_HAS_VULKANFX
         this->fragment_shader = strdup(fragment_shader.c_str());
 #endif
@@ -812,6 +878,24 @@ class wayfire_filters : public wf::plugin_interface_t,
         if (view)
         {
             auto tr = ensure_transformer(view, shader_path);
+            wf::gles::run_in_context_if_gles([&]
+            {
+                if (tr->program.get_program_id(wf::TEXTURE_TYPE_RGBA) == 0)
+                {
+                    pop_transformer(view);
+                    LOGE("Failed to compile shader.");
+                    return wf::ipc::json_error("Failed to compile shader.");
+                }
+
+                LOGI("Successfully compiled and applied shader.");
+                view->damage();
+                return wf::ipc::json_ok();
+            });
+            LOGI("Transformer applied.");
+        } else
+        {
+            LOGE("Failed to find view with given id. Maybe it isn't mapped?");
+            return wf::ipc::json_error("Failed to find view with given id. Maybe it isn't mapped?");
         }
 
         // LOGI("Successfully compiled and applied shader.");
