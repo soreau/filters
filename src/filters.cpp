@@ -512,20 +512,20 @@ class wf_filters : public wf::scene::view_2d_transformer_t
                 auto& our_state = ensure_vk(state);
 
                 std::vector<float> unified_buffer;
-                unified_buffer.push_back(x);
-                unified_buffer.push_back(y + h);
+                unified_buffer.push_back(-1.0f);
+                unified_buffer.push_back(-1.0f);
                 unified_buffer.push_back(0.0f);
                 unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(x);
-                unified_buffer.push_back(y);
-                unified_buffer.push_back(0.0f);
-                unified_buffer.push_back(0.0f);
-                unified_buffer.push_back(x + w);
-                unified_buffer.push_back(y);
+                unified_buffer.push_back(-1.0f);
                 unified_buffer.push_back(1.0f);
                 unified_buffer.push_back(0.0f);
-                unified_buffer.push_back(x + w);
-                unified_buffer.push_back(y + h);
+                unified_buffer.push_back(0.0f);
+                unified_buffer.push_back(1.0f);
+                unified_buffer.push_back(1.0f);
+                unified_buffer.push_back(1.0f);
+                unified_buffer.push_back(0.0f);
+                unified_buffer.push_back(1.0f);
+                unified_buffer.push_back(-1.0f);
                 unified_buffer.push_back(1.0f);
                 unified_buffer.push_back(1.0f);
 
@@ -543,7 +543,14 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
                 auto [layout, _] = cmd_buf.bind_pipeline(our_state.pipeline, data.target, specialization);
 
-                cmd_buf.set_full_viewport(data.target);
+                VkViewport viewport{};
+                viewport.x     = x;
+                viewport.y     = y;
+                viewport.width = w;
+                viewport.height   = h;
+                viewport.minDepth = 0.0f;
+                viewport.maxDepth = 1.0f;
+                vkCmdSetViewport(cmd_buf, 0, 1, &viewport);
 
                 cmd_buf.bind_texture(texture);
 
@@ -551,7 +558,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
                     0, 1, &tex_dset, 0, nullptr);
 
                 vulkan_push_constants_t push_constants{};
-                push_constants.mvp = wf::vk::render_target_transform(data.target);
+                push_constants.mvp = wf::gles::output_transform(data.target);
                 push_constants.uv_scale  = sampling.get_uv_scale();
                 push_constants.uv_offset = sampling.get_uv_offset();
                 push_constants.margins   = margins;
@@ -567,6 +574,8 @@ class wf_filters : public wf::scene::view_2d_transformer_t
                 {
                     vkCmdDraw(cmd_buf, 4, 1, 0, 0);
                 });
+
+                cmd_buf.set_full_viewport(data.target);
             });
 #endif
         }
