@@ -57,7 +57,6 @@ static const char *vertex_shader =
     R"(#version 310 es
 #ifdef VULKAN
 #extension GL_ARB_shading_language_include : require
-#extension GL_EXT_shader_non_constant_global_initializers : require
 #endif
 
 precision highp float;
@@ -116,23 +115,7 @@ void main()
 }
 )";
 
-// Supplied via ipc
-// static const char *fragment_shader =
-// R"(
-// #version 100
-// @builtin_ext@
-// @builtin@
-//
-// precision mediump float;
-//
-// varying mediump vec2 uvpos;
-//
-// void main()
-// {
-// vec4 c = get_pixel(uvpos);
-// gl_FragColor = c;
-// }
-// )";
+/* Fragment shader Supplied via ipc */
 
 static std::string pixdecor_custom_data_name = "wf-decoration-shadow-margin";
 
@@ -160,218 +143,211 @@ namespace scene
 namespace filters
 {
 const std::string transformer_name = "filters";
+#if WF_HAS_VULKANFX
+std::array<std::shared_ptr<wf::vk::gpu_buffer_t>, 4> vulkan_vertex_buffer;
+
+class vulkan_state_t : public wf::custom_data_t
+{
+  public:
+    std::shared_ptr<wf::vk::graphics_pipeline_t> pipeline;
+};
+
+struct vulkan_push_constants_t
+{
+    alignas(16) glm::mat4 mvp;
+    alignas(8)  glm::vec2 uv_scale;
+    alignas(8)  glm::vec2 uv_offset;
+    alignas(16) glm::vec4 margins;
+    alignas(8)  float progress;
+};
+
+SpirvBinary compile_glsl_to_spirv(glslang_stage_t stage, const char *glsl_source)
+{
+    SpirvBinary result = {.words = NULL, .size = 0};
+
+    // 1. Define the compilation input options
+    const glslang_input_t input = {
+        .language = GLSLANG_SOURCE_GLSL,
+        .stage    = stage,
+        .client   = GLSLANG_CLIENT_VULKAN,
+        .client_version  = GLSLANG_TARGET_VULKAN_1_3,       // Targeting Vulkan 1.3
+        .target_language = GLSLANG_TARGET_SPV,
+        .target_language_version = GLSLANG_TARGET_SPV_1_3, // SPIR-V 1.3
+        .code = glsl_source,
+        .default_version = 100,
+        .default_profile = GLSLANG_NO_PROFILE,
+        .force_default_version_and_profile = false,
+        .forward_compatible = false,
+        .messages = GLSLANG_MSG_DEFAULT_BIT,
+        .resource = glslang_default_resource(), // Default hardware limits
+    };
+
+    // 2. Create the shader object instance
+    glslang_shader_t *shader = glslang_shader_create(&input);
+    if (!shader)
+    {
+        fprintf(stderr, "Failed to create glslang shader instance.\n");
+        return result;
+    }
+
+    // 3. Preprocess and Parse the shader string
+    if (!glslang_shader_preprocess(shader, &input) || !glslang_shader_parse(shader, &input))
+    {
+        fprintf(stderr, "Shader compilation failed!\n");
+        fprintf(stderr, "Info log:\n%s\n", glslang_shader_get_info_log(shader));
+        fprintf(stderr, "Debug log:\n%s\n", glslang_shader_get_info_debug_log(shader));
+        glslang_shader_delete(shader);
+        return result;
+    }
+
+    // 4. Create a program container and link the shader
+    glslang_program_t *program = glslang_program_create();
+    glslang_program_add_shader(program, shader);
+
+    if (!glslang_program_link(program, GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT))
+    {
+        fprintf(stderr, "Shader linking failed!\n");
+        fprintf(stderr, "Program info log:\n%s\n", glslang_program_get_info_log(program));
+        glslang_program_delete(program);
+        glslang_shader_delete(shader);
+        return result;
+    }
+
+    // 5. Generate the actual SPIR-V bytecode assembly
+    glslang_program_SPIRV_generate(program, stage);
+
+    size_t spirv_size = glslang_program_SPIRV_get_size(program);
+    if (spirv_size > 0)
+    {
+        result.words = (uint32_t*)malloc(spirv_size * sizeof(uint32_t));
+        result.size  = spirv_size;
+        glslang_program_SPIRV_get(program, result.words);
+    }
+
+    // 6. Inspect individual component messages if needed, then clean up code allocations
+    const char *spirv_messages = glslang_program_SPIRV_get_messages(program);
+    if (spirv_messages)
+    {
+        printf("SPIR-V Generation Messages:\n%s\n", spirv_messages);
+    }
+
+    glslang_program_delete(program);
+    glslang_shader_delete(shader);
+
+    return result;
+}
+
+vulkan_state_t& ensure_vk(wf::vulkan_render_state_t& state, const char *fragment_shader)
+{
+    glslang_initialize_process();
+    VkShaderModule vs, fs;
+    SpirvBinary vert_binary = compile_glsl_to_spirv(GLSLANG_STAGE_VERTEX, vertex_shader);
+    SpirvBinary frag_binary = compile_glsl_to_spirv(GLSLANG_STAGE_FRAGMENT, fragment_shader);
+
+    if (vert_binary.words && frag_binary.words)
+    {
+        LOGI("Successfully generated SPIR-V vertex shader! Size: %zu words (%zu bytes).\n",
+            vert_binary.size, vert_binary.size * sizeof(uint32_t));
+        LOGI("Successfully generated SPIR-V fragment shader! Size: %zu words (%zu bytes).\n",
+            frag_binary.size, frag_binary.size * sizeof(uint32_t));
+
+        vs =
+            state.get_context()->load_shader_module(vert_binary.words,
+                vert_binary.size * sizeof(uint32_t));
+        fs =
+            state.get_context()->load_shader_module(frag_binary.words,
+                frag_binary.size * sizeof(uint32_t));
+
+        free(vert_binary.words);
+        free(frag_binary.words);
+    } else
+    {
+        LOGI("Compilation failed.\n");
+        free(vert_binary.words);
+        free(frag_binary.words);
+        glslang_finalize_process();
+        return *(new vulkan_state_t{});
+    }
+
+    glslang_finalize_process();
+
+    wf::vk::pipeline_params_t params{};
+    params.shaders = {
+        {.stage = VK_SHADER_STAGE_VERTEX_BIT, .shader = vs},
+        {.stage = VK_SHADER_STAGE_FRAGMENT_BIT, .shader = fs},
+    };
+
+    params.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
+    params.vertex_input_description = {{
+        .binding   = 0,
+        .stride    = sizeof(float) * 4,
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+    }};
+    params.vertex_attribute_description = {
+        {
+            .location = 0,
+            .binding  = 0,
+            .format   = VK_FORMAT_R32G32_SFLOAT,
+            .offset   = 0,
+        },
+        {
+            .location = 1,
+            .binding  = 0,
+            .format   = VK_FORMAT_R32G32_SFLOAT,
+            .offset   = sizeof(float) * 2,
+        },
+    };
+
+    // One descriptor set for the texture.
+    params.descriptor_set_layouts = {wf::vk::pipeline_params_t::texture_descriptor_set_t{}};
+    params.push_constants = {
+        VkPushConstantRange{
+            .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            .offset     = 0,
+            .size = sizeof(vulkan_push_constants_t),
+        },
+    };
+
+    auto data = std::make_unique<vulkan_state_t>();
+    data->pipeline = std::make_shared<wf::vk::graphics_pipeline_t>(state.get_context(), params);
+    auto ptr = data.get();
+    state.store_data<vulkan_state_t>(std::move(data));
+    return *ptr;
+}
+
+std::shared_ptr<wf::vk::gpu_buffer_t> find_buffer(
+    std::shared_ptr<wf::vk::context_t> ctx, VkDeviceSize total_size)
+{
+    auto& buffers = vulkan_vertex_buffer;
+    for (size_t i = 0; i < buffers.size(); i++)
+    {
+        auto& buffer = buffers[i];
+        // Try to reuse the vertex buffer if possible, to avoid reallocations.
+        if (buffer && (buffer->get_size() >= total_size) && (buffer.use_count() == 1))
+        {
+            return buffers[i];
+        }
+    }
+
+    buffers[0] = ctx->create_buffer(total_size,
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    return buffers[0];
+}
+
+#endif
 
 class wf_filters : public wf::scene::view_2d_transformer_t
 {
     wayfire_view view;
     wf::output_t *output;
     OpenGL::program_t *shader;
-    char *fragment_shader;
     std::unique_ptr<wf::animation::simple_animation_t> fade;
-    std::array<std::shared_ptr<wf::vk::gpu_buffer_t>, 4> vulkan_vertex_buffer;
 
   public:
     OpenGL::program_t program;
 
     class simple_node_render_instance_t : public wf::scene::transformer_render_instance_t<transformer_base_node_t>
     {
-#if WF_HAS_VULKANFX
-        class vulkan_state_t : public wf::custom_data_t
-        {
-          public:
-            std::shared_ptr<wf::vk::graphics_pipeline_t> pipeline;
-        };
-
-        struct vulkan_push_constants_t
-        {
-            alignas(16) glm::mat4 mvp;
-            alignas(8)  glm::vec2 uv_scale;
-            alignas(8)  glm::vec2 uv_offset;
-            alignas(16) glm::vec4 margins;
-            alignas(8)  float progress;
-        };
-
-        SpirvBinary compile_glsl_to_spirv(glslang_stage_t stage, const char *glsl_source)
-        {
-            SpirvBinary result = {.words = NULL, .size = 0};
-
-            // 1. Define the compilation input options
-            const glslang_input_t input = {
-                .language = GLSLANG_SOURCE_GLSL,
-                .stage    = stage,
-                .client   = GLSLANG_CLIENT_VULKAN,
-                .client_version  = GLSLANG_TARGET_VULKAN_1_3,       // Targeting Vulkan 1.3
-                .target_language = GLSLANG_TARGET_SPV,
-                .target_language_version = GLSLANG_TARGET_SPV_1_3, // SPIR-V 1.3
-                .code = glsl_source,
-                .default_version = 100,
-                .default_profile = GLSLANG_NO_PROFILE,
-                .force_default_version_and_profile = false,
-                .forward_compatible = false,
-                .messages = GLSLANG_MSG_DEFAULT_BIT,
-                .resource = glslang_default_resource(), // Default hardware limits
-            };
-
-            // 2. Create the shader object instance
-            glslang_shader_t *shader = glslang_shader_create(&input);
-            if (!shader)
-            {
-                fprintf(stderr, "Failed to create glslang shader instance.\n");
-                return result;
-            }
-
-            // 3. Preprocess and Parse the shader string
-            if (!glslang_shader_preprocess(shader, &input) || !glslang_shader_parse(shader, &input))
-            {
-                fprintf(stderr, "Shader compilation failed!\n");
-                fprintf(stderr, "Info log:\n%s\n", glslang_shader_get_info_log(shader));
-                fprintf(stderr, "Debug log:\n%s\n", glslang_shader_get_info_debug_log(shader));
-                glslang_shader_delete(shader);
-                return result;
-            }
-
-            // 4. Create a program container and link the shader
-            glslang_program_t *program = glslang_program_create();
-            glslang_program_add_shader(program, shader);
-
-            if (!glslang_program_link(program, GLSLANG_MSG_SPV_RULES_BIT | GLSLANG_MSG_VULKAN_RULES_BIT))
-            {
-                fprintf(stderr, "Shader linking failed!\n");
-                fprintf(stderr, "Program info log:\n%s\n", glslang_program_get_info_log(program));
-                glslang_program_delete(program);
-                glslang_shader_delete(shader);
-                return result;
-            }
-
-            // 5. Generate the actual SPIR-V bytecode assembly
-            glslang_program_SPIRV_generate(program, stage);
-
-            size_t spirv_size = glslang_program_SPIRV_get_size(program);
-            if (spirv_size > 0)
-            {
-                result.words = (uint32_t*)malloc(spirv_size * sizeof(uint32_t));
-                result.size  = spirv_size;
-                glslang_program_SPIRV_get(program, result.words);
-            }
-
-            // 6. Inspect individual component messages if needed, then clean up code allocations
-            const char *spirv_messages = glslang_program_SPIRV_get_messages(program);
-            if (spirv_messages)
-            {
-                printf("SPIR-V Generation Messages:\n%s\n", spirv_messages);
-            }
-
-            glslang_program_delete(program);
-            glslang_shader_delete(shader);
-
-            return result;
-        }
-
-        vulkan_state_t& ensure_vk(wf::vulkan_render_state_t& state)
-        {
-            if (auto d = state.get_data<vulkan_state_t>())
-            {
-                return *d;
-            }
-
-            glslang_initialize_process();
-            VkShaderModule vs, fs;
-            SpirvBinary vert_binary = compile_glsl_to_spirv(GLSLANG_STAGE_VERTEX, vertex_shader);
-            SpirvBinary frag_binary = compile_glsl_to_spirv(GLSLANG_STAGE_FRAGMENT, self->fragment_shader);
-
-            if (vert_binary.words && frag_binary.words)
-            {
-                LOGI("Successfully generated SPIR-V vertex shader! Size: %zu words (%zu bytes).\n",
-                    vert_binary.size, vert_binary.size * sizeof(uint32_t));
-                LOGI("Successfully generated SPIR-V fragment shader! Size: %zu words (%zu bytes).\n",
-                    frag_binary.size, frag_binary.size * sizeof(uint32_t));
-
-                vs =
-                    state.get_context()->load_shader_module(vert_binary.words,
-                        vert_binary.size * sizeof(uint32_t));
-                fs =
-                    state.get_context()->load_shader_module(frag_binary.words,
-                        frag_binary.size * sizeof(uint32_t));
-
-                free(vert_binary.words);
-                free(frag_binary.words);
-                free(self->fragment_shader);
-            } else
-            {
-                LOGI("Compilation failed.\n");
-                free(vert_binary.words);
-                free(frag_binary.words);
-                free(self->fragment_shader);
-                glslang_finalize_process();
-                return *(new vulkan_state_t{});
-            }
-
-            glslang_finalize_process();
-
-            wf::vk::pipeline_params_t params{};
-            params.shaders = {
-                {.stage = VK_SHADER_STAGE_VERTEX_BIT, .shader = vs},
-                {.stage = VK_SHADER_STAGE_FRAGMENT_BIT, .shader = fs},
-            };
-
-            params.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
-            params.vertex_input_description = {{
-                .binding   = 0,
-                .stride    = sizeof(float) * 4,
-                .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
-            }};
-            params.vertex_attribute_description = {
-                {
-                    .location = 0,
-                    .binding  = 0,
-                    .format   = VK_FORMAT_R32G32_SFLOAT,
-                    .offset   = 0,
-                },
-                {
-                    .location = 1,
-                    .binding  = 0,
-                    .format   = VK_FORMAT_R32G32_SFLOAT,
-                    .offset   = sizeof(float) * 2,
-                },
-            };
-
-            // One descriptor set for the texture.
-            params.descriptor_set_layouts = {wf::vk::pipeline_params_t::texture_descriptor_set_t{}};
-            params.push_constants = {
-                VkPushConstantRange{
-                    .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                    .offset     = 0,
-                    .size = sizeof(vulkan_push_constants_t),
-                },
-            };
-
-            auto data = std::make_unique<vulkan_state_t>();
-            data->pipeline = std::make_shared<wf::vk::graphics_pipeline_t>(state.get_context(), params);
-            auto ptr = data.get();
-            state.store_data<vulkan_state_t>(std::move(data));
-            return *ptr;
-        }
-
-        std::shared_ptr<wf::vk::gpu_buffer_t> find_buffer(
-            std::shared_ptr<wf::vk::context_t> ctx, VkDeviceSize total_size)
-        {
-            auto& buffers = self->vulkan_vertex_buffer;
-            for (size_t i = 0; i < buffers.size(); i++)
-            {
-                auto& buffer = buffers[i];
-                // Try to reuse the vertex buffer if possible, to avoid reallocations.
-                if (buffer && (buffer->get_size() >= total_size) && (buffer.use_count() == 1))
-                {
-                    return buffers[i];
-                }
-            }
-
-            buffers[0] = ctx->create_buffer(total_size,
-                VK_BUFFER_USAGE_VERTEX_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
-            return buffers[0];
-        }
-
-#endif
         wf::signal::connection_t<node_damage_signal> on_node_damaged =
             [=] (node_damage_signal *ev)
         {
@@ -509,7 +485,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             data.pass->custom_vulkan_subpass([&] (wf::vulkan_render_state_t& state,
                                                   wf::vk::command_buffer_t& cmd_buf)
             {
-                auto& our_state = ensure_vk(state);
+                auto our_state = *state.get_data<vulkan_state_t>();
 
                 std::vector<float> unified_buffer;
                 unified_buffer.push_back(-1.0f);
@@ -598,7 +574,11 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             program.compile(vertex_shader, fragment_shader);
         });
 #if WF_HAS_VULKANFX
-        this->fragment_shader = strdup(fragment_shader.c_str());
+        if (wf::get_core().is_vulkan())
+        {
+            ensure_vk(vulkan_render_state_t::get(), fragment_shader.c_str());
+        }
+
 #endif
         fade = std::make_unique<wf::animation::simple_animation_t>(wf::create_option<int>(700));
         fade->set(0.0, 0.0);
