@@ -1,17 +1,28 @@
-#version 300 es
-@builtin_ext@
-@builtin@
+#version 310 es
+#ifdef VULKAN
+#extension GL_ARB_shading_language_include : require
+#endif
 
-precision mediump float;
+precision highp float;
 
-uniform sampler2D in_tex;
-out vec4 out_color;
-in mediump vec2 uvpos;
+layout(binding = 0) uniform sampler2D in_tex;
+layout(location = 0) in highp vec2 uvpos;
+layout(location = 0) out vec4 out_color;
+
+#ifdef VULKAN
+layout(push_constant) uniform uniforms { mat4 mvp;
+                                         vec2 tex_scale;
+                                         vec2 tex_offset;
+                                         vec4 margins;
+                                         float progress; };
+#else
+uniform vec4 margins;
 uniform float progress;
+#endif
 
 void main()
 {
-    vec4 c = get_pixel(uvpos);
+    vec4 c = texture(in_tex, uvpos);
     vec4 oc = c;
     // Invert
     c.r = 1.0 - c.r;

@@ -1,13 +1,24 @@
-#version 300 es
-@builtin_ext@
-@builtin@
+#version 310 es
+#ifdef VULKAN
+#extension GL_ARB_shading_language_include : require
+#endif
 
-precision mediump float;
+precision highp float;
 
-uniform sampler2D in_tex;
-out vec4 out_color;
-in mediump vec2 uvpos;
+layout(binding = 0) uniform sampler2D in_tex;
+layout(location = 0) in highp vec2 uvpos;
+layout(location = 0) out vec4 out_color;
+
+#ifdef VULKAN
+layout(push_constant) uniform uniforms { mat4 mvp;
+                                         vec2 tex_scale;
+                                         vec2 tex_offset;
+                                         vec4 margins;
+                                         float progress; };
+#else
+uniform vec4 margins;
 uniform float progress;
+#endif
 
 // Shader adapted from: https://www.shadertoy.com/view/Xltfzj
 
@@ -24,14 +35,14 @@ void main()
     vec2 s = vec2(size);
     vec2 r = radius / s;
     vec2 uv = uvpos;
-    vec4 c = get_pixel(uv);
+    vec4 c = texture(in_tex, uvpos);
     vec4 oc = c;
 
     for (float d = 0.0; d < PI_2; d += PI_2 / directions)
     {
         for(float i = 1.0 / quality; i <= 1.0; i += 1.0 / quality)
         {
-            c += get_pixel(uv + vec2(cos(d), sin(d)) * r * i);
+            c += texture(in_tex, uv + vec2(cos(d), sin(d)) * r * i);
         }
     }
 
