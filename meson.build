@@ -16,7 +16,7 @@ add_project_arguments(['-DWAYFIRE_PLUGIN'], language: ['cpp', 'c'])
 add_project_link_arguments(['-rdynamic','-fPIC'], language:'cpp')
 
 wayfire = dependency('wayfire', version: '>=0.8.1')
-
+glslang = dependency('glslang')
 
 subdir('src')
 subdir('metadata')
