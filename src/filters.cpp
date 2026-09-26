@@ -62,7 +62,9 @@ static const char *vertex_shader =
 
 precision highp float;
 
+#ifdef VULKAN
 #include "texture-transform.vert"
+#endif
 
 layout(location = 0) in highp vec2 position;
 layout(location = 1) in highp vec2 texcoord;

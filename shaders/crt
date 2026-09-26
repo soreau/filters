@@ -5,7 +5,9 @@
 
 precision highp float;
 
+#ifdef VULKAN
 #include "color-transform.frag"
+#endif
 
 layout(binding = 0) uniform sampler2D in_tex;
 layout(location = 0) in highp vec2 uvpos;
@@ -38,8 +40,10 @@ void main()
         c.b *= 1.25;
     }
 
+#ifdef VULKAN
     c  = vec4(transform_color(c.rgb), c.a);
     oc = vec4(transform_color(oc.rgb), oc.a);
+#endif
 
     out_color = mix(oc, c, progress);
 }
