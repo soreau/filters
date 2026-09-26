@@ -24,6 +24,7 @@
 
 #include <string>
 #include <fstream>
+#include <filesystem>
 #include <wayfire/core.hpp>
 #include <wayfire/view.hpp>
 #include <wayfire/plugin.hpp>
@@ -61,35 +62,7 @@ static const char *vertex_shader =
 
 precision highp float;
 
-// Texture rotation, matches wl_output_transform
-const int TEXTURE_ROTATION = 0;
-
-/**
- * Apply texture rotation to the given UV coordinates, as well as scale them with a base and offset, which
- * allows limiting texturing to a subset of the texture.
- */
-vec2 transform_texture_uv(vec2 uv, vec2 scale, vec2 off) {
-#ifndef VULKAN
-    return uv;
-#endif
-    if (TEXTURE_ROTATION == 1) { // WL_OUTPUT_TRANSFORM_90
-        return vec2(1.0 - uv.y, uv.x) * scale + off;
-    } else if (TEXTURE_ROTATION == 2) { // WL_OUTPUT_TRANSFORM_180
-        return vec2(1.0 - uv.x, 1.0 - uv.y) * scale + off;
-    } else if (TEXTURE_ROTATION == 3) { // WL_OUTPUT_TRANSFORM_270
-        return vec2(uv.y, 1.0 - uv.x) * scale + off;
-    } else if (TEXTURE_ROTATION == 4) { // WL_OUTPUT_TRANSFORM_FLIPPED
-        return vec2(1.0 - uv.x, uv.y) * scale + off;
-    } else if (TEXTURE_ROTATION == 5) { // WL_OUTPUT_TRANSFORM_FLIPPED_90
-        return vec2(1.0 - uv.y, 1.0 - uv.x) * scale + off;
-    } else if (TEXTURE_ROTATION == 6) { // WL_OUTPUT_TRANSFORM_FLIPPED_180
-        return vec2(uv.x, 1.0 - uv.y) * scale + off;
-    } else if (TEXTURE_ROTATION == 7) { // WL_OUTPUT_TRANSFORM_FLIPPED_270
-        return vec2(uv.y, uv.x) * scale + off;
-    } else { // WL_OUTPUT_TRANSFORM_NORMAL
-        return uv * scale + off;
-    }
-}
+#include "texture-transform.vert"
 
 layout(location = 0) in highp vec2 position;
 layout(location = 1) in highp vec2 texcoord;
@@ -111,7 +84,11 @@ uniform vec2 tex_offset;
 void main()
 {
     gl_Position = mvp * vec4(position.xy, 0.0, 1.0);
+#ifdef VULKAN
     uvpos = transform_texture_uv(texcoord, tex_scale, tex_offset);
+#else
+    uvpos = texcoord;
+#endif
 }
 )";
 
@@ -161,9 +138,66 @@ struct vulkan_push_constants_t
     alignas(8)  float progress;
 };
 
-SpirvBinary compile_glsl_to_spirv(glslang_stage_t stage, const char *glsl_source)
+struct include_user_data_t
+{
+    std::string shader_directory;
+};
+
+glsl_include_result_t *shader_include_local(void *user_data, const char *header_name,
+    const char *include_name, size_t include_depth)
+{
+    include_user_data_t *include_user_data = (include_user_data_t*)user_data;
+
+    std::ifstream t(include_user_data->shader_directory + '/' + header_name);
+    std::string shader_directory((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
+
+    if (shader_directory.empty())
+    {
+        return NULL;
+    }
+
+    glsl_include_result_t *result = (glsl_include_result_t*)malloc(sizeof(glsl_include_result_t));
+
+    result->header_name   = strdup(header_name);
+    result->header_data   = strdup(shader_directory.c_str());
+    result->header_length = shader_directory.size();
+    return result;
+}
+
+glsl_include_result_t *shader_include_system(void *user_data, const char *header_name,
+    const char *include_name, size_t include_depth)
+{
+    return NULL;
+}
+
+int shader_free_include_result(void *user_data, glsl_include_result_t *result)
+{
+    if (result)
+    {
+        free((void*)result->header_name);
+        free((void*)result->header_data);
+        free(result);
+    }
+
+    return 0;
+}
+
+SpirvBinary compile_glsl_to_spirv(glslang_stage_t stage, const char *shader_directory,
+    const char *glsl_source)
 {
     SpirvBinary result = {.words = NULL, .size = 0};
+
+    glsl_include_callbacks_t include_callbacks =
+    {
+        .include_system = shader_include_system,
+        .include_local  = shader_include_local,
+        .free_include_result = shader_free_include_result
+    };
+
+    include_user_data_t include_user_data =
+    {
+        .shader_directory = shader_directory
+    };
 
     // 1. Define the compilation input options
     const glslang_input_t input = {
@@ -178,8 +212,10 @@ SpirvBinary compile_glsl_to_spirv(glslang_stage_t stage, const char *glsl_source
         .default_profile = GLSLANG_NO_PROFILE,
         .force_default_version_and_profile = false,
         .forward_compatible = false,
-        .messages = GLSLANG_MSG_DEFAULT_BIT,
-        .resource = glslang_default_resource(), // Default hardware limits
+        .messages  = GLSLANG_MSG_DEFAULT_BIT,
+        .resource  = glslang_default_resource(), // Default hardware limits
+        .callbacks = include_callbacks,
+        .callbacks_ctx = &include_user_data,
     };
 
     // 2. Create the shader object instance
@@ -237,12 +273,13 @@ SpirvBinary compile_glsl_to_spirv(glslang_stage_t stage, const char *glsl_source
     return result;
 }
 
-vulkan_state_t& ensure_vk(wf::vulkan_render_state_t& state, const char *fragment_shader)
+bool ensure_vk(wf::vulkan_render_state_t& state, const char *shader_directory, const char *fragment_shader)
 {
     glslang_initialize_process();
     VkShaderModule vs, fs;
-    SpirvBinary vert_binary = compile_glsl_to_spirv(GLSLANG_STAGE_VERTEX, vertex_shader);
-    SpirvBinary frag_binary = compile_glsl_to_spirv(GLSLANG_STAGE_FRAGMENT, fragment_shader);
+    SpirvBinary vert_binary = compile_glsl_to_spirv(GLSLANG_STAGE_VERTEX, shader_directory, vertex_shader);
+    SpirvBinary frag_binary =
+        compile_glsl_to_spirv(GLSLANG_STAGE_FRAGMENT, shader_directory, fragment_shader);
 
     if (vert_binary.words && frag_binary.words)
     {
@@ -266,7 +303,7 @@ vulkan_state_t& ensure_vk(wf::vulkan_render_state_t& state, const char *fragment
         free(vert_binary.words);
         free(frag_binary.words);
         glslang_finalize_process();
-        return *(new vulkan_state_t{});
+        return false;
     }
 
     glslang_finalize_process();
@@ -310,9 +347,9 @@ vulkan_state_t& ensure_vk(wf::vulkan_render_state_t& state, const char *fragment
 
     auto data = std::make_unique<vulkan_state_t>();
     data->pipeline = std::make_shared<wf::vk::graphics_pipeline_t>(state.get_context(), params);
-    auto ptr = data.get();
     state.store_data<vulkan_state_t>(std::move(data));
-    return *ptr;
+
+    return true;
 }
 
 std::shared_ptr<wf::vk::gpu_buffer_t> find_buffer(
@@ -491,19 +528,19 @@ class wf_filters : public wf::scene::view_2d_transformer_t
                 unified_buffer.push_back(-1.0f);
                 unified_buffer.push_back(-1.0f);
                 unified_buffer.push_back(0.0f);
+                unified_buffer.push_back(0.0f);
+                unified_buffer.push_back(-1.0f);
+                unified_buffer.push_back(1.0f);
+                unified_buffer.push_back(0.0f);
+                unified_buffer.push_back(1.0f);
+                unified_buffer.push_back(1.0f);
+                unified_buffer.push_back(1.0f);
+                unified_buffer.push_back(1.0f);
+                unified_buffer.push_back(1.0f);
                 unified_buffer.push_back(1.0f);
                 unified_buffer.push_back(-1.0f);
                 unified_buffer.push_back(1.0f);
                 unified_buffer.push_back(0.0f);
-                unified_buffer.push_back(0.0f);
-                unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(0.0f);
-                unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(-1.0f);
-                unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(1.0f);
 
                 VkDeviceSize total_size = unified_buffer.size() * sizeof(float);
 
@@ -576,7 +613,11 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 #if WF_HAS_VULKANFX
         if (wf::get_core().is_vulkan())
         {
-            ensure_vk(vulkan_render_state_t::get(), fragment_shader.c_str());
+            if (!ensure_vk(vulkan_render_state_t::get(),
+                std::filesystem::path(shader_path).parent_path().c_str(), fragment_shader.c_str()))
+            {
+                pop_transformer(view);
+            }
         }
 
 #endif

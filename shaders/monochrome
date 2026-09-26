@@ -5,6 +5,8 @@
 
 precision highp float;
 
+#include "color-transform.frag"
+
 layout(binding = 0) uniform sampler2D in_tex;
 layout(location = 0) in highp vec2 uvpos;
 layout(location = 0) out vec4 out_color;
@@ -28,5 +30,9 @@ void main()
     // Monochrome
     float grey = 0.21 * c.r + 0.71 * c.g + 0.07 * c.b;
     c = vec4(c.r * color_factor + grey * (1.0 - color_factor), c.g * color_factor + grey * (1.0 - color_factor), c.b * color_factor + grey * (1.0 - color_factor), 1.0);
+
+    c  = vec4(transform_color(c.rgb), c.a);
+    oc = vec4(transform_color(oc.rgb), oc.a);
+
     out_color = mix(oc, c, progress);
 }

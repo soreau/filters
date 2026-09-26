@@ -5,6 +5,8 @@
 
 precision highp float;
 
+#include "color-transform.frag"
+
 layout(binding = 0) uniform sampler2D in_tex;
 layout(location = 0) in highp vec2 uvpos;
 layout(location = 0) out vec4 out_color;
@@ -31,5 +33,9 @@ void main()
     c.r *= c.a;
     c.g *= c.a;
     c.b *= c.a;
+
+    c  = vec4(transform_color(c.rgb), c.a);
+    oc = vec4(transform_color(oc.rgb), oc.a);
+
     out_color = mix(oc, c, progress);
 }
