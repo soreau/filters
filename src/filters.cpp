@@ -33,6 +33,7 @@
 #include <wayfire/util/duration.hpp>
 #include <wayfire/render-manager.hpp>
 #include <wayfire/view-transform.hpp>
+#include <wayfire/scene-operations.hpp>
 #include <wayfire/per-output-plugin.hpp>
 #include <wayfire/signal-definitions.hpp>
 #include <wayfire/plugins/ipc/ipc-helpers.hpp>
@@ -125,7 +126,13 @@ const std::string transformer_name = "filters";
 #if WF_HAS_VULKANFX
 std::array<std::shared_ptr<wf::vk::gpu_buffer_t>, 4> vulkan_vertex_buffer;
 
-class vulkan_state_t : public wf::custom_data_t
+class vulkan_view_state_t : public wf::custom_data_t
+{
+  public:
+    std::shared_ptr<wf::vk::graphics_pipeline_t> pipeline;
+};
+
+class vulkan_output_state_t : public wf::custom_data_t
 {
   public:
     std::shared_ptr<wf::vk::graphics_pipeline_t> pipeline;
@@ -275,7 +282,8 @@ SpirvBinary compile_glsl_to_spirv(glslang_stage_t stage, const char *shader_dire
     return result;
 }
 
-bool ensure_vk(wf::vulkan_render_state_t& state, const char *shader_directory, const char *fragment_shader)
+bool ensure_vk(wf::vulkan_render_state_t& state, const char *shader_directory, const char *fragment_shader,
+    bool for_output)
 {
     glslang_initialize_process();
     VkShaderModule vs, fs;
@@ -347,9 +355,17 @@ bool ensure_vk(wf::vulkan_render_state_t& state, const char *shader_directory, c
         },
     };
 
-    auto data = std::make_unique<vulkan_state_t>();
-    data->pipeline = std::make_shared<wf::vk::graphics_pipeline_t>(state.get_context(), params);
-    state.store_data<vulkan_state_t>(std::move(data));
+    if (for_output)
+    {
+        auto data = std::make_unique<vulkan_output_state_t>();
+        data->pipeline = std::make_shared<wf::vk::graphics_pipeline_t>(state.get_context(), params);
+        state.store_data<vulkan_output_state_t>(std::move(data));
+    } else
+    {
+        auto data = std::make_unique<vulkan_view_state_t>();
+        data->pipeline = std::make_shared<wf::vk::graphics_pipeline_t>(state.get_context(), params);
+        state.store_data<vulkan_view_state_t>(std::move(data));
+    }
 
     return true;
 }
@@ -524,7 +540,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             data.pass->custom_vulkan_subpass([&] (wf::vulkan_render_state_t& state,
                                                   wf::vk::command_buffer_t& cmd_buf)
             {
-                auto our_state = *state.get_data<vulkan_state_t>();
+                auto our_state = *state.get_data<vulkan_view_state_t>();
 
                 std::vector<float> unified_buffer;
                 unified_buffer.push_back(-1.0f);
@@ -616,7 +632,7 @@ class wf_filters : public wf::scene::view_2d_transformer_t
         if (wf::get_core().is_vulkan())
         {
             if (!ensure_vk(vulkan_render_state_t::get(),
-                std::filesystem::path(shader_path).parent_path().c_str(), fragment_shader.c_str()))
+                std::filesystem::path(shader_path).parent_path().c_str(), fragment_shader.c_str(), false))
             {
                 pop_transformer(view);
             }
@@ -709,46 +725,56 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
             output->render->rem_effect(&pre_hook);
             output->render->rem_post(&hook);
             output->render->damage_whole();
-            if (program)
+            wf::gles::run_in_context_if_gles([&]
             {
-                wf::gles::run_in_context_if_gles([&]
+                if (program)
                 {
                     program->free_resources();
-                });
-            }
+                }
+            });
 
             program = nullptr;
             active  = false;
         }
     };
 
-    wf::json_t set_fs_shader(std::string shader)
+    wf::json_t set_fs_shader(std::string shader_path)
     {
-        if (program)
+        wf::gles::run_in_context_if_gles([&]
         {
-            wf::gles::run_in_context_if_gles([&]
+            if (program)
             {
                 program->free_resources();
-            });
-        } else
-        {
-            program = std::make_shared<OpenGL::program_t>();
-        }
+            } else
+            {
+                program = std::make_shared<OpenGL::program_t>();
+            }
+        });
 
-        std::ifstream t(shader);
+        std::ifstream t(shader_path);
         std::string fragment_shader((std::istreambuf_iterator<char>(t)), std::istreambuf_iterator<char>());
         wf::gles::run_in_context_if_gles([&]
         {
             program->compile(vertex_shader, fragment_shader);
+            if (program->get_program_id(wf::TEXTURE_TYPE_RGBA) == 0)
+            {
+                LOGE("Failed to compile fullscreen shader.");
+                output->render->rem_post(&hook);
+                program = nullptr;
+            }
         });
-        if (program->get_program_id(wf::TEXTURE_TYPE_RGBA) == 0)
+
+#if WF_HAS_VULKANFX
+        if (wf::get_core().is_vulkan())
         {
-            LOGE("Failed to compile fullscreen shader.");
-            output->render->rem_post(&hook);
-            program = nullptr;
-            return wf::ipc::json_error("Failed to compile fullscreen shader.");
+            if (!ensure_vk(vulkan_render_state_t::get(),
+                std::filesystem::path(shader_path).parent_path().c_str(), fragment_shader.c_str(), true))
+            {
+                return wf::ipc::json_error("Failed to initialize vulkan for fullscreen shader.");
+            }
         }
 
+#endif
         output->render->damage_whole();
 
         if (active)
@@ -788,10 +814,10 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
             -1.0f, 1.0f
         };
         static const float texCoords[] = {
-            0.0f, 1.0f,
-            1.0f, 1.0f,
+            0.0f, 0.0f,
             1.0f, 0.0f,
-            0.0f, 0.0f
+            1.0f, 1.0f,
+            0.0f, 1.0f
         };
 
         wf::gles::run_in_context_if_gles([&]
@@ -823,6 +849,83 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
 
             program->deactivate();
         });
+
+#if WF_HAS_VULKANFX
+        if (wf::get_core().is_vulkan())
+        {
+            auto texture = wf::texture_t::from_buffer(aux_buf.get_buffer(), aux_buf.get_texture());
+            wf::render_pass_params_t params{};
+            params.target = render_target_t{render_buf};
+            params.target.geometry     = output->get_relative_geometry();
+            params.target.wl_transform = output->handle->transform;
+            params.target.scale     = output->handle->scale;
+            params.reference_output = output;
+            params.damage = output->get_relative_geometry();
+            wf::render_pass_t pass{params};
+            pass.run_partial();
+            auto& state    = wf::vulkan_render_state_t::get();
+            auto& cmd_buf  = vk::command_buffer_t::buffer_for_pass(pass);
+            auto our_state = *state.get_data<vulkan_output_state_t>();
+
+            std::vector<float> unified_buffer;
+            unified_buffer.push_back(-1.0f);
+            unified_buffer.push_back(-1.0f);
+            unified_buffer.push_back(0.0f);
+            unified_buffer.push_back(1.0f);
+            unified_buffer.push_back(-1.0f);
+            unified_buffer.push_back(1.0f);
+            unified_buffer.push_back(0.0f);
+            unified_buffer.push_back(0.0f);
+            unified_buffer.push_back(1.0f);
+            unified_buffer.push_back(1.0f);
+            unified_buffer.push_back(1.0f);
+            unified_buffer.push_back(0.0f);
+            unified_buffer.push_back(1.0f);
+            unified_buffer.push_back(-1.0f);
+            unified_buffer.push_back(1.0f);
+            unified_buffer.push_back(1.0f);
+
+            VkDeviceSize total_size = unified_buffer.size() * sizeof(float);
+
+            auto buffer = find_buffer(state.get_context(), total_size);
+            buffer->write(unified_buffer.data(), total_size);
+
+            auto tex_dset = state.get_descriptor_pool()->get_descriptor_set(cmd_buf, texture);
+            wf::vk::texture_sampling_params_t sampling{texture};
+
+            wf::vk::pipeline_specialization_t specialization{};
+            specialization.add_specialization_for_texture(texture);
+
+            auto [layout, _] = cmd_buf.bind_pipeline(our_state.pipeline, pass.get_target(), specialization);
+
+            cmd_buf.set_full_viewport(pass.get_target());
+            cmd_buf.bind_texture(texture);
+
+            vkCmdBindDescriptorSets(cmd_buf, VK_PIPELINE_BIND_POINT_GRAPHICS, layout,
+                0, 1, &tex_dset, 0, nullptr);
+
+            vulkan_push_constants_t push_constants{};
+            push_constants.mvp = glm::mat4(1.0);
+            push_constants.uv_scale  = sampling.get_uv_scale();
+            push_constants.uv_offset = sampling.get_uv_offset();
+            push_constants.margins   = glm::vec4(0.0);
+            push_constants.progress  = *fade;
+            vkCmdPushConstants(cmd_buf, layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(vulkan_push_constants_t), &push_constants);
+
+            cmd_buf.bind_buffer(buffer);
+            VkDeviceSize offset = 0;
+            vkCmdBindVertexBuffers(cmd_buf, 0, 1, &buffer->get_buffer(), &offset);
+
+            cmd_buf.for_each_scissor_rect(pass.get_target(), pass.get_target().geometry, [&]
+            {
+                vkCmdDraw(cmd_buf, 4, 1, 0, 0);
+            });
+
+            pass.submit();
+        }
+
+#endif
     }
 
     void fini() override
@@ -923,14 +1026,12 @@ class wayfire_filters : public wf::plugin_interface_t,
                 view->damage();
                 return wf::ipc::json_ok();
             });
-            LOGI("Transformer applied.");
         } else
         {
             LOGE("Failed to find view with given id. Maybe it isn't mapped?");
             return wf::ipc::json_error("Failed to find view with given id. Maybe it isn't mapped?");
         }
 
-        // LOGI("Successfully compiled and applied shader.");
         view->damage();
         return wf::ipc::json_ok();
     };
