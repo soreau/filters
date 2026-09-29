@@ -27,7 +27,6 @@ uniform float progress;
 void main()
 {
     vec4 c = texture(in_tex, uvpos);
-    vec4 oc = c;
     ivec2 size = textureSize(in_tex, 0);
     vec2 texelSize = 1.0 / vec2(size);
     vec4 border_color = vec4(0.0, 1.0, 0.0, 1.0);
@@ -37,8 +36,9 @@ void main()
 
 #ifdef VULKAN
     c  = vec4(transform_color(c.rgb), c.a);
-    oc = vec4(transform_color(oc.rgb), oc.a);
 #endif
+
+    vec4 oc = c;
 
     // Sides
     if ((uvpos.x <= (texelSize.x * border_size) || uvpos.x >= 1.0 - (texelSize.x * border_size)) && uvpos.y > (texelSize.y * corner_radius) && uvpos.y < 1.0 - (texelSize.y * corner_radius) ||

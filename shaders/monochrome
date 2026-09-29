@@ -27,12 +27,12 @@ uniform float progress;
 void main()
 {
     vec4 c = texture(in_tex, uvpos);
-    vec4 oc = c;
 
 #ifdef VULKAN
     c  = vec4(transform_color(c.rgb), c.a);
-    oc = vec4(transform_color(oc.rgb), oc.a);
 #endif
+
+    vec4 oc = c;
 
     float color_factor = 0.0; // 1.0 = color, 0.0 = greyscale
     // Monochrome

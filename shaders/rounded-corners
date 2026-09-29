@@ -29,12 +29,12 @@ void main()
     vec4 c = texture(in_tex, uvpos);
     vec2 uv = uvpos;
     vec4 m = margins;
-    vec4 oc = c;
 
 #ifdef VULKAN
     c  = vec4(transform_color(c.rgb), c.a);
-    oc = vec4(transform_color(oc.rgb), oc.a);
 #endif
+
+    vec4 oc = c;
 
     vec4 shadow_color = vec4(0.0, 0.0, 0.2, 0.5);
     ivec2 size = textureSize(in_tex, 0);

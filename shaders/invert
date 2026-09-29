@@ -27,12 +27,12 @@ uniform float progress;
 void main()
 {
     vec4 c = texture(in_tex, uvpos);
-    vec4 oc = c;
 
 #ifdef VULKAN
     c  = vec4(transform_color(c.rgb), c.a);
-    oc = vec4(transform_color(oc.rgb), oc.a);
 #endif
+
+    vec4 oc = c;
 
     // Invert
     c.r = 1.0 - c.r;
