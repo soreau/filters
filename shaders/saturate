@@ -1,0 +1,50 @@
+#version 310 es
+#ifdef VULKAN
+#extension GL_ARB_shading_language_include : require
+#endif
+
+precision highp float;
+
+#ifdef VULKAN
+#include "color-transform.frag"
+#endif
+
+layout(binding = 0) uniform sampler2D in_tex;
+layout(location = 0) in highp vec2 uvpos;
+layout(location = 0) out vec4 out_color;
+
+#ifdef VULKAN
+layout(push_constant) uniform uniforms { mat4 mvp;
+                                         vec2 tex_scale;
+                                         vec2 tex_offset;
+                                         vec4 margins;
+                                         float progress; };
+#else
+uniform vec4 margins;
+uniform float progress;
+#endif
+
+float adj = 1.5;
+
+vec3 saturate(vec3 rgb, float adjustment)
+{
+    // Algorithm from Chapter 16 of OpenGL Shading Language
+    const vec3 w = vec3(0.2125, 0.7154, 0.0721);
+    vec3 intensity = vec3(dot(rgb, w));
+    return mix(intensity, rgb, adjustment);
+}
+
+void main()
+{
+    vec4 c = texture(in_tex, uvpos);
+    vec4 oc = c;
+    // Saturate
+    c = vec4(saturate(oc.rgb, adj), oc.a);
+
+#ifdef VULKAN
+    c  = vec4(transform_color(c.rgb), c.a);
+    oc = vec4(transform_color(oc.rgb), oc.a);
+#endif
+
+    out_color = mix(oc, c, progress);
+}
