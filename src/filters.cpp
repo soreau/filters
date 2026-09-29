@@ -674,15 +674,16 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
     virtual ~wf_filters()
     {
+        if (output)
+        {
+            output->render->rem_effect(&pre_hook);
+        }
+
         wf::gles::run_in_context_if_gles([&]
         {
             program.free_resources();
         });
         fade.reset();
-        if (output)
-        {
-            output->render->rem_effect(&pre_hook);
-        }
     }
 };
 
