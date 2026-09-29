@@ -123,7 +123,31 @@ namespace filters
 {
 const std::string transformer_name = "filters";
 #if WF_HAS_VULKANFX
-std::array<std::shared_ptr<wf::vk::gpu_buffer_t>, 4> vulkan_vertex_buffer;
+static std::array<std::shared_ptr<wf::vk::gpu_buffer_t>, 4> vulkan_vertex_buffer;
+static std::vector<float> surface_unified_buffer, output_unified_buffer;
+
+static const float vertex_data[] =
+{
+    -1.0f, -1.0f,
+    1.0f, -1.0f,
+    1.0f, 1.0f,
+    -1.0f, 1.0f
+};
+static const float surface_tex_coords[] =
+{
+    0.0f, 1.0f,
+    1.0f, 1.0f,
+    1.0f, 0.0f,
+    0.0f, 0.0f
+};
+static const float output_tex_coords[] =
+{
+    0.0f, 0.0f,
+    1.0f, 0.0f,
+    1.0f, 1.0f,
+    0.0f, 1.0f
+};
+
 
 class vulkan_view_state_t : public wf::custom_data_t
 {
@@ -488,25 +512,12 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
             wf::gles::run_in_context_if_gles([&]
             {
-                static const float vertexData[] = {
-                    -1.0f, -1.0f,
-                    1.0f, -1.0f,
-                    1.0f, 1.0f,
-                    -1.0f, 1.0f
-                };
-                static const float texCoords[] = {
-                    0.0f, 1.0f,
-                    1.0f, 1.0f,
-                    1.0f, 0.0f,
-                    0.0f, 0.0f
-                };
-
                 auto src_tex = wf::gles_texture_t{get_texture(1.0)};
                 data.pass->custom_gles_subpass(data.target, [&]
                 {
                     this->self->shader->use(src_tex.type);
-                    this->self->shader->attrib_pointer("position", 2, 0, vertexData);
-                    this->self->shader->attrib_pointer("texcoord", 2, 0, texCoords);
+                    this->self->shader->attrib_pointer("position", 2, 0, vertex_data);
+                    this->self->shader->attrib_pointer("texcoord", 2, 0, surface_tex_coords);
                     this->self->shader->uniformMatrix4f("mvp", wf::gles::output_transform(data.target));
                     this->self->shader->uniform1f("progress", *self->fade);
                     this->self->shader->uniform1i("in_tex", 0);
@@ -543,28 +554,10 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             {
                 auto our_state = *state.get_data<vulkan_view_state_t>();
 
-                std::vector<float> unified_buffer;
-                unified_buffer.push_back(-1.0f);
-                unified_buffer.push_back(-1.0f);
-                unified_buffer.push_back(0.0f);
-                unified_buffer.push_back(0.0f);
-                unified_buffer.push_back(-1.0f);
-                unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(0.0f);
-                unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(-1.0f);
-                unified_buffer.push_back(1.0f);
-                unified_buffer.push_back(0.0f);
-
-                VkDeviceSize total_size = unified_buffer.size() * sizeof(float);
+                VkDeviceSize total_size = surface_unified_buffer.size() * sizeof(float);
 
                 auto buffer = find_buffer(state.get_context(), total_size);
-                buffer->write(unified_buffer.data(), total_size);
+                buffer->write(surface_unified_buffer.data(), total_size);
 
                 auto texture  = get_texture(data.target.scale);
                 auto tex_dset = state.get_descriptor_pool()->get_descriptor_set(cmd_buf, texture);
@@ -809,25 +802,12 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
 
     void render(wf::auxilliary_buffer_t& aux_buf, const wf::render_buffer_t& render_buf)
     {
-        static const float vertexData[] = {
-            -1.0f, -1.0f,
-            1.0f, -1.0f,
-            1.0f, 1.0f,
-            -1.0f, 1.0f
-        };
-        static const float texCoords[] = {
-            0.0f, 0.0f,
-            1.0f, 0.0f,
-            1.0f, 1.0f,
-            0.0f, 1.0f
-        };
-
         wf::gles::run_in_context_if_gles([&]
         {
             /* Upload data to shader */
             program->use(wf::TEXTURE_TYPE_RGBA);
-            program->attrib_pointer("position", 2, 0, vertexData);
-            program->attrib_pointer("texcoord", 2, 0, texCoords);
+            program->attrib_pointer("position", 2, 0, vertex_data);
+            program->attrib_pointer("texcoord", 2, 0, output_tex_coords);
             program->uniformMatrix4f("mvp", glm::mat4(1.0));
             program->uniform1f("progress", *fade);
             program->uniform1i("in_tex", 0);
@@ -869,28 +849,10 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
             auto& cmd_buf  = vk::command_buffer_t::buffer_for_pass(pass);
             auto our_state = *state.get_data<vulkan_output_state_t>();
 
-            std::vector<float> unified_buffer;
-            unified_buffer.push_back(-1.0f);
-            unified_buffer.push_back(-1.0f);
-            unified_buffer.push_back(0.0f);
-            unified_buffer.push_back(1.0f);
-            unified_buffer.push_back(-1.0f);
-            unified_buffer.push_back(1.0f);
-            unified_buffer.push_back(0.0f);
-            unified_buffer.push_back(0.0f);
-            unified_buffer.push_back(1.0f);
-            unified_buffer.push_back(1.0f);
-            unified_buffer.push_back(1.0f);
-            unified_buffer.push_back(0.0f);
-            unified_buffer.push_back(1.0f);
-            unified_buffer.push_back(-1.0f);
-            unified_buffer.push_back(1.0f);
-            unified_buffer.push_back(1.0f);
-
-            VkDeviceSize total_size = unified_buffer.size() * sizeof(float);
+            VkDeviceSize total_size = output_unified_buffer.size() * sizeof(float);
 
             auto buffer = find_buffer(state.get_context(), total_size);
-            buffer->write(unified_buffer.data(), total_size);
+            buffer->write(output_unified_buffer.data(), total_size);
 
             auto tex_dset = state.get_descriptor_pool()->get_descriptor_set(cmd_buf, texture);
             wf::vk::texture_sampling_params_t sampling{texture};
@@ -980,6 +942,19 @@ class wayfire_filters : public wf::plugin_interface_t,
         ipc_repo->register_method("wf/filters/fs-has-shader", ipc_fs_has_shader);
 
         per_output_tracker_mixin_t::init_output_tracking();
+
+        for (int i = 0; i < 8; i += 2)
+        {
+            surface_unified_buffer.push_back(vertex_data[i + 0]);
+            surface_unified_buffer.push_back(vertex_data[i + 1]);
+            surface_unified_buffer.push_back(surface_tex_coords[7 - (i + 1)]);
+            surface_unified_buffer.push_back(surface_tex_coords[7 - (i + 0)]);
+
+            output_unified_buffer.push_back(vertex_data[i + 0]);
+            output_unified_buffer.push_back(vertex_data[i + 1]);
+            output_unified_buffer.push_back(output_tex_coords[7 - (i + 1)]);
+            output_unified_buffer.push_back(output_tex_coords[7 - (i + 0)]);
+        }
     }
 
     void handle_new_output(wf::output_t *output) override
