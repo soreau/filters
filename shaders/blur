@@ -42,6 +42,11 @@ void main()
     vec4 c = texture(in_tex, uvpos);
     vec4 oc = c;
 
+#ifdef VULKAN
+    c  = vec4(transform_color(c.rgb), c.a);
+    oc = vec4(transform_color(oc.rgb), oc.a);
+#endif
+
     for (float d = 0.0; d < PI_2; d += PI_2 / directions)
     {
         for(float i = 1.0 / quality; i <= 1.0; i += 1.0 / quality)
@@ -49,11 +54,6 @@ void main()
             c += texture(in_tex, uv + vec2(cos(d), sin(d)) * r * i);
         }
     }
-
-#ifdef VULKAN
-    c  = vec4(transform_color(c.rgb), c.a);
-    oc = vec4(transform_color(oc.rgb), oc.a);
-#endif
 
     c /= quality * directions - 15.0;
     out_color = mix(oc, c, progress);

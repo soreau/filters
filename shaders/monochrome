@@ -28,15 +28,16 @@ void main()
 {
     vec4 c = texture(in_tex, uvpos);
     vec4 oc = c;
-    float color_factor = 0.0; // 1.0 = color, 0.0 = greyscale
-    // Monochrome
-    float grey = 0.21 * c.r + 0.71 * c.g + 0.07 * c.b;
-    c = vec4(c.r * color_factor + grey * (1.0 - color_factor), c.g * color_factor + grey * (1.0 - color_factor), c.b * color_factor + grey * (1.0 - color_factor), c.a);
 
 #ifdef VULKAN
     c  = vec4(transform_color(c.rgb), c.a);
     oc = vec4(transform_color(oc.rgb), oc.a);
 #endif
+
+    float color_factor = 0.0; // 1.0 = color, 0.0 = greyscale
+    // Monochrome
+    float grey = 0.21 * c.r + 0.71 * c.g + 0.07 * c.b;
+    c = vec4(c.r * color_factor + grey * (1.0 - color_factor), c.g * color_factor + grey * (1.0 - color_factor), c.b * color_factor + grey * (1.0 - color_factor), c.a);
 
     out_color = mix(oc, c, progress);
 }

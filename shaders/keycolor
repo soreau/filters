@@ -33,19 +33,21 @@ vec4 color = vec4(0.0, 0.0, 0.0, 0.7);
 void main()
 {
     vec4 c = texture(in_tex, uvpos);
-    vec4 vdiff = abs(vec4(color.rgb, 1.0) - vec4(c.rgb, 1.0));
-    float diff = max(max(max(vdiff.r, vdiff.g), vdiff.b), vdiff.a);
     vec4 oc = c;
-    if (diff < threshold)
-    {
-        oc  *= color.a;
-        oc.a = color.a * c.a;
-    }
 
 #ifdef VULKAN
     c  = vec4(transform_color(c.rgb), c.a);
     oc = vec4(transform_color(oc.rgb), oc.a);
 #endif
+
+    vec4 vdiff = abs(vec4(color.rgb, 1.0) - vec4(c.rgb, 1.0));
+    float diff = max(max(max(vdiff.r, vdiff.g), vdiff.b), vdiff.a);
+
+    if (diff < threshold)
+    {
+        oc  *= color.a;
+        oc.a = color.a * c.a;
+    }
 
     out_color = mix(c, oc, progress);
 }

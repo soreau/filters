@@ -38,13 +38,14 @@ void main()
 {
     vec4 c = texture(in_tex, uvpos);
     vec4 oc = c;
-    // Saturate
-    c = vec4(saturate(oc.rgb, adj), oc.a);
 
 #ifdef VULKAN
     c  = vec4(transform_color(c.rgb), c.a);
     oc = vec4(transform_color(oc.rgb), oc.a);
 #endif
+
+    // Saturate
+    c = vec4(saturate(oc.rgb, adj), oc.a);
 
     out_color = mix(oc, c, progress);
 }

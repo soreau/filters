@@ -34,6 +34,12 @@ void main()
     float border_size = 2.0;
     float corner_radius = 10.0;
     float d;
+
+#ifdef VULKAN
+    c  = vec4(transform_color(c.rgb), c.a);
+    oc = vec4(transform_color(oc.rgb), oc.a);
+#endif
+
     // Sides
     if ((uvpos.x <= (texelSize.x * border_size) || uvpos.x >= 1.0 - (texelSize.x * border_size)) && uvpos.y > (texelSize.y * corner_radius) && uvpos.y < 1.0 - (texelSize.y * corner_radius) ||
         ((uvpos.y <= (texelSize.y * border_size) || uvpos.y >= 1.0 - (texelSize.y * border_size)) && uvpos.x > (texelSize.x * corner_radius) && uvpos.x < 1.0 - (texelSize.x * corner_radius)))
@@ -74,11 +80,6 @@ void main()
             c = border_color;
         }
     }
-
-#ifdef VULKAN
-    c  = vec4(transform_color(c.rgb), c.a);
-    oc = vec4(transform_color(oc.rgb), oc.a);
-#endif
 
     out_color = mix(oc, c, progress);
 }
