@@ -399,7 +399,6 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
   public:
     OpenGL::program_t program;
-
     class simple_node_render_instance_t : public wf::scene::transformer_render_instance_t<transformer_base_node_t>
     {
         wf::signal::connection_t<node_damage_signal> on_node_damaged =
@@ -422,11 +421,6 @@ class wf_filters : public wf::scene::view_2d_transformer_t
             this->view = view;
             this->push_to_parent = push_damage;
             self->connect(&on_node_damaged);
-        }
-
-        void transform_damage_region(wf::regionf_t& damage) override
-        {
-            damage |= self->get_bounding_box();
         }
 
         ~simple_node_render_instance_t()
