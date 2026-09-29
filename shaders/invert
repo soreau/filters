@@ -28,6 +28,12 @@ void main()
 {
     vec4 c = texture(in_tex, uvpos);
     vec4 oc = c;
+
+#ifdef VULKAN
+    c  = vec4(transform_color(c.rgb), c.a);
+    oc = vec4(transform_color(oc.rgb), oc.a);
+#endif
+
     // Invert
     c.r = 1.0 - c.r;
     c.g = 1.0 - c.g;
@@ -35,11 +41,6 @@ void main()
     c.r *= c.a;
     c.g *= c.a;
     c.b *= c.a;
-
-#ifdef VULKAN
-    c  = vec4(transform_color(c.rgb), c.a);
-    oc = vec4(transform_color(oc.rgb), oc.a);
-#endif
 
     out_color = mix(oc, c, progress);
 }
