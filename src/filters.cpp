@@ -317,6 +317,14 @@ bool ensure_vk(wf::vulkan_render_state_t& state, const char *shader_directory, c
 
     glslang_finalize_process();
 
+    if (for_output)
+    {
+        state.release_data<vulkan_output_state_t>();
+    } else
+    {
+        state.release_data<vulkan_view_state_t>();
+    }
+
     wf::vk::pipeline_params_t params{};
     params.shaders = {
         {.stage = VK_SHADER_STAGE_VERTEX_BIT, .shader = vs},
@@ -633,7 +641,6 @@ class wf_filters : public wf::scene::view_2d_transformer_t
 
 #endif
         fade = std::make_unique<wf::animation::simple_animation_t>(wf::create_option<int>(700));
-        fade->set(0.0, 0.0);
         fade->animate(1.0);
     }
 
@@ -769,6 +776,8 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
 
 #endif
         output->render->damage_whole();
+        fade->set(0.0, 0.0);
+        fade->animate(1.0);
 
         if (active)
         {
@@ -778,7 +787,6 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
 
         output->render->add_post(&hook);
         output->render->add_effect(&pre_hook, wf::OUTPUT_EFFECT_PRE);
-        fade->animate(1.0);
         active = true;
 
         LOGI("Successfully compiled and applied fullscreen shader to output: ", output->to_string());
@@ -787,6 +795,7 @@ class wayfire_per_output_filters : public wf::per_output_plugin_instance_t
 
     wf::json_t unset_fs_shader()
     {
+        output->render->damage_whole();
         fade->animate(0.0);
         return wf::ipc::json_ok();
     }
