@@ -1,21 +1,43 @@
-#version 300 es
-@builtin_ext@
-@builtin@
+#version 310 es
+#ifdef VULKAN
+#extension GL_ARB_shading_language_include : require
+#endif
 
-precision mediump float;
+precision highp float;
 
-uniform sampler2D in_tex;
-out vec4 out_color;
-in mediump vec2 uvpos;
+#ifdef VULKAN
+#include "color-transform.frag"
+#endif
+
+layout(binding = 0) uniform sampler2D in_tex;
+layout(location = 0) in highp vec2 uvpos;
+layout(location = 0) out vec4 out_color;
+
+#ifdef VULKAN
+layout(push_constant) uniform uniforms { mat4 mvp;
+                                         vec2 tex_scale;
+                                         vec2 tex_offset;
+                                         vec4 margins;
+                                         float progress; };
+#else
+uniform vec4 margins;
 uniform float progress;
+#endif
 
 void main()
 {
-    vec4 c = get_pixel(uvpos);
+    vec4 c = texture(in_tex, uvpos);
+
+#ifdef VULKAN
+    c  = vec4(transform_color(c.rgb), c.a);
+#endif
+
     vec4 oc = c;
+
     float color_factor = 0.0; // 1.0 = color, 0.0 = greyscale
     // Monochrome
     float grey = 0.21 * c.r + 0.71 * c.g + 0.07 * c.b;
-    c = vec4(c.r * color_factor + grey * (1.0 - color_factor), c.g * color_factor + grey * (1.0 - color_factor), c.b * color_factor + grey * (1.0 - color_factor), 1.0);
+    c = vec4(c.r * color_factor + grey * (1.0 - color_factor), c.g * color_factor + grey * (1.0 - color_factor), c.b * color_factor + grey * (1.0 - color_factor), c.a);
+
     out_color = mix(oc, c, progress);
 }
