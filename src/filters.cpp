@@ -33,7 +33,6 @@
 #include <wayfire/util/duration.hpp>
 #include <wayfire/render-manager.hpp>
 #include <wayfire/view-transform.hpp>
-#include <wayfire/scene-operations.hpp>
 #include <wayfire/per-output-plugin.hpp>
 #include <wayfire/signal-definitions.hpp>
 #include <wayfire/plugins/ipc/ipc-helpers.hpp>
